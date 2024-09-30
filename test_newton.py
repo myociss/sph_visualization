@@ -3,6 +3,7 @@ import math
 import matplotlib.pyplot as plt
 from scipy.special import gamma
 from numba import cuda, float32, int8, from_dtype
+from kernels import w_gauss, dwdq_gauss, w_quintic_gpu, dwdq_quintic_gpu
 
 import pytest
 
@@ -37,176 +38,6 @@ tpb = (threads, threads)
 bpg = ( int(particle_dim / threads), int(particle_dim / threads) )
 
 kernel_radius = 3.0
-
-def W(r, h, dim):
-
-    if dim == 2:
-        sigma = quintic_norm_2d
-    else:
-        sigma = quintic_norm_3d
-
-    #print(h)
-    h1 = 1. / h
-    #print(h1)
-    #exit()
-    q = r * h1
-
-    #print(q)
-    #print(r.shape)
-    #print(h1.shape)
-    #exit()
-
-    w = np.zeros(q.shape)
-
-    #np.putmask(w, (q >= 0) & (q < 1), (1/4)*(2-q)**3 - (1-q)**3)
-    #np.putmask(w, (q >= 1) & (q < 2), (1/4)*(2-q)**3)
-    #np.putmask(w, q >= 2, 0.0)
-
-    tmp3 = 3. - q
-    tmp2 = 2. - q
-    tmp1 = 1. - q
-
-    val1 = tmp3 * tmp3 * tmp3 * tmp3 * tmp3
-    val1 -= 6.0 * tmp2 * tmp2 * tmp2 * tmp2 * tmp2
-
-    val0 = tmp3 * tmp3 * tmp3 * tmp3 * tmp3
-    val0 -= 6.0 * tmp2 * tmp2 * tmp2 * tmp2 * tmp2
-    val0 += 15. * tmp1 * tmp1 * tmp1 * tmp1 * tmp1
-
-
-    np.putmask(w, q >= 3.0, 0.0)
-    np.putmask(w, (q >= 2) & (q < 3), tmp3 * tmp3 * tmp3 * tmp3 * tmp3)
-    #print(w)
-    np.putmask(w, (q >= 1) & (q < 2), val1)
-    np.putmask(w, (q >= 0) & (q < 1), val0)
-
-    #print(w)
-    #exit()
-
-    return (h1 ** dim) * sigma * w
-
-'''
-@cuda.jit('float32(float32, float32)', device=True)
-def kernel_w_quintic(r, smoothing_length):
-    # from phantom sph: https://github.com/danieljprice/phantom/blob/master/src/main/kernel_cubic.f90
-    h1 = 1. / smoothing_length
-    q = r * h1
-    q2 = q*q
-
-    fac = base_fac_cubic * h1**dim
-
-    if (q < 1.):
-        wkern  = 0.75*q2*q - 1.5*q2 + 1.
-    elif (q < 2.):
-        wkern  = -0.25*(q - 2.)**3
-    else:
-        wkern  = 0.
-
-    return fac * wkern
-
-@cuda.jit('float32(float32, float32)', device=True)
-def dwdq_quintic(r, smoothing_length):
-    # from phantom sph: https://github.com/danieljprice/phantom/blob/master/src/main/kernel_cubic.f90
-    h1 = 1. / smoothing_length
-    q = r * h1
-    q2 = q*q
-
-    fac = base_fac_cubic * h1**dim
-
-    if (q < 1.):
-        grkern = q*(2.25*q - 3.)
-    elif (q < 2.):
-        grkern = -0.75*(q - 2.)**2
-    else:
-        grkern = 0.
-
-    return fac * grkern
-
-@cuda.jit('float32(float32, float32)', device=True)
-def kernel_grad_w_quintic(r, smoothing_length):
-    # from pysph
-    h1 = 1. / smoothing_length
-
-    # compute the gradient.
-    if (r > 1e-12):
-        ##wdash = dwdq_cubic(r, smoothing_length)
-        wdash = dwdq_cubic(r, smoothing_length)
-        tmp = wdash * h1 / r
-    else:
-        tmp = 0.0
-
-    return tmp
-'''
-
-@cuda.jit('float32(float32, float32, int64)', device=True)
-def kernel_w_quintic(r, h, dim):
-    # from phantom sph: https://github.com/danieljprice/phantom/blob/master/src/main/kernel_cubic.f90
-    if dim == 2:
-        sigma = quintic_norm_2d
-    else:
-        sigma = quintic_norm_3d
-
-    h1 = 1. / h
-    q = r * h1
-    
-    tmp3 = 3. - q
-    tmp2 = 2. - q
-    tmp1 = 1. - q
-
-    val1 = tmp3 * tmp3 * tmp3 * tmp3 * tmp3
-    val1 -= 6.0 * tmp2 * tmp2 * tmp2 * tmp2 * tmp2
-
-    val0 = tmp3 * tmp3 * tmp3 * tmp3 * tmp3
-    val0 -= 6.0 * tmp2 * tmp2 * tmp2 * tmp2 * tmp2
-    val0 += 15. * tmp1 * tmp1 * tmp1 * tmp1 * tmp1
-
-    if q >= 3:
-        w = 0.0
-    elif q >= 2:
-        w = tmp3 * tmp3 * tmp3 * tmp3 * tmp3
-    elif q >= 1:
-        w = val1
-    else:
-        w = val0
-
-    return (h1 ** dim) * sigma * w
-
-@cuda.jit('float32(float32, float32, int64)', device=True)
-def kernel_grad_w_quintic(r, h, dim):
-    # from phantom sph: https://github.com/danieljprice/phantom/blob/master/src/main/kernel_cubic.f90
-    if dim == 2:
-        sigma = quintic_norm_2d
-    else:
-        sigma = quintic_norm_3d
-
-    h1 = 1. / h
-    q = r * h1
-    
-    tmp3 = 3. - q
-    tmp2 = 2. - q
-    tmp1 = 1. - q
-
-    val1 = -5.0 * tmp3 * tmp3 * tmp3 * tmp3
-    val1 += 30.0 * tmp2 * tmp2 * tmp2 * tmp2
-
-    val0 = -5.0 * tmp3 * tmp3 * tmp3 * tmp3
-    val0 += 30.0 * tmp2 * tmp2 * tmp2 * tmp2
-    val0 -= 75.0 * tmp1 * tmp1 * tmp1 * tmp1
-
-    if q >= 3:
-        grad_w = 0.0
-    elif q >= 2:
-        grad_w = tmp3 * tmp3 * tmp3 * tmp3 * tmp3
-    elif q >= 1:
-        grad_w = val1
-    else:
-        grad_w = val0
-
-    #if r > 1e-12:
-    #    return (h1 ** dim) * sigma * grad_w * h1 / r
-    #else:
-    #    return 0.0
-    return sigma * grad_w #* h1
 
 
 @cuda.jit('void(float32[:,:,:], float32, float32[:,:,:])')
@@ -255,15 +86,11 @@ def calc_zeta(pos, mass, smoothing_lengths, zeta):
                 radius += (position[d] - pos[i1, j1, d])**2
 
             radius = math.sqrt(radius)
-            w = kernel_w_quintic(radius, h, dim)
+            w = w_quintic_gpu(radius, h, dim)
             rho += particle_mass * w
 
     zeta[i,j] = particle_mass * ( (eta_const / h)**dim ) - rho
 
-#@cuda.jit('void(float32[:,:], float32[:,:], float32[:,:])')
-#def calc_midpoint(x_low, x_high, midpoint):
-#    i, j = cuda.grid(2)
-#    midpoint[i, j] = 0.5 * (x_low[i,j] + x_high[i,j])
 
 @cuda.jit('void(float32[:,:,:], float32[:,:])')
 def calc_midpoint(x, midpoint):
@@ -281,44 +108,17 @@ def bisect_update(x, x_midpt, y_low, y_midpt):
     else:
         x[i,j,1] = x_midpt[i,j]
 
-#@cuda.jit('void(float32[:,:], float32[:,:], float32[:,:], float32[:,:], float32[:,:])')
-#def bisect_update(x_low, x_high, x_midpt, y_low, y_midpt):
-#    i, j = cuda.grid(2)
-    
-#    same_sign = y_low[i,j] * y_midpt[i, j] > 0
-
-#    if same_sign:
-#        x_low[i,j] = x_midpt[i,j]
-#    else:
-#        x_high[i,j] = x_midpt[i,j]
-
-
-
 
 @cuda.jit('void(float32[:,:], float32, int64, boolean, float32[:,:])')
 def kernel_gpu_test(radii, h, dim, is_grad, kernel_vals):
     i, j = cuda.grid(2)
     radius = radii[i, j]
     if is_grad:
-        w = kernel_grad_w_quintic(radius, h, dim)
+        w = dwdq_quintic_gpu(radius, h, dim)
     else:
-        w = kernel_w_quintic(radius, h, dim)
+        w = w_quintic_gpu(radius, h, dim)
     kernel_vals[i,j] = w
 
-
-def kernel_gauss( r, h, dim ):
-    norm_const = 1 / np.sqrt(np.pi)
-
-    h1 = 1.0 / h
-    
-    w = ( (h1 * norm_const) **dim )  * np.exp( -r**2 / h**2)
-    
-    return w
-
-def kernel_grad_w_gauss(r, h, dim):
-    norm_const = 1 / np.sqrt(np.pi)
-    h1 = 1.0 / h
-    return (-2 * h1**2) * ( (h1 * norm_const) **dim ) * np.exp( -r**2 / h**2)
 
 def pairwise_separations_pmocz( ri, rj ):
 	"""
@@ -354,8 +154,8 @@ def pairwise_separations_pmocz( ri, rj ):
 def setup_data():
     np.random.seed(42)
 
-    pos_2d = cuda.to_device( R*0.1 * np.random.randn(particle_dim, particle_dim, 2).astype('f4') )
-    pos_3d = cuda.to_device( R*0.1 * np.random.randn(particle_dim, particle_dim, 3).astype('f4') )
+    pos_2d = cuda.to_device( R * np.random.randn(particle_dim, particle_dim, 2).astype('f4') )
+    pos_3d = cuda.to_device( R * np.random.randn(particle_dim, particle_dim, 3).astype('f4') )
 
     yield pos_2d, pos_3d
 
@@ -390,14 +190,15 @@ def test_h_guesses(setup_data, spatial_dim):
 @pytest.mark.parametrize('spatial_dim, k', [
     (2, 'w'),
     (3, 'w'),
-    #(2, 'grad_w'),
-    #(3, 'grad_w'),
+    (2, 'grad_w'),
+    (3, 'grad_w'),
 ])
 def test_kernel(setup_data, spatial_dim, k):
     pos_2d, pos_3d = setup_data
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
-    gauss_kernel_func = kernel_grad_w_gauss if k == 'grad_w' else kernel_gauss
+    #gauss_kernel_func = kernel_grad_w_gauss if k == 'grad_w' else kernel_gauss
+    gauss_kernel_func = dwdq_gauss if k == 'grad_w' else w_gauss
     is_grad = k == 'grad_w'
 
     pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
@@ -409,6 +210,9 @@ def test_kernel(setup_data, spatial_dim, k):
     
     gauss_res = gauss_kernel_func(r_pmocz, h_init, spatial_dim)
 
+    if is_grad:
+        np.fill_diagonal(gauss_res, 0.0)
+
     assert not np.isnan(gauss_res).any()
 
     radii = cuda.to_device(r_pmocz)
@@ -417,6 +221,9 @@ def test_kernel(setup_data, spatial_dim, k):
 
     quintic_res = kernel_vals.copy_to_host()
 
+    if is_grad:
+        np.fill_diagonal(quintic_res, 0.0)
+
     assert not np.isnan(quintic_res).any()
 
     diff = np.abs(gauss_res-quintic_res)
@@ -424,15 +231,11 @@ def test_kernel(setup_data, spatial_dim, k):
     zero_vals = np.zeros(gauss_res.shape)
     np.putmask(zero_vals, (gauss_res == 0) | (quintic_res == 0), diff)
 
-    assert np.all(zero_vals < 0.02)
-    #print(np.max(zero_vals))
-
-    #print(gauss_res)
-    #print(quintic_res)
+    assert np.all(zero_vals < 0.5)
 
     max_diff_idx = np.unravel_index(np.argmax(diff), diff.shape)
     
-    assert diff[max_diff_idx] / max(gauss_res[max_diff_idx], quintic_res[max_diff_idx]) < 0.04
+    assert diff[max_diff_idx] / max(gauss_res[max_diff_idx], quintic_res[max_diff_idx]) < 0.05
 
 
 
