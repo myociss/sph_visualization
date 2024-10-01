@@ -4,30 +4,17 @@ import matplotlib.pyplot as plt
 from scipy.special import gamma
 from numba import cuda, float32, int8, from_dtype
 from kernels import w_gauss, dwdq_gauss, w_quintic_gpu, dwdq_quintic_gpu
+from smoothing_length import calc_h_guesses, calc_midpoint, calc_zeta, bisect_update, get_new_smoothing_lengths
 
 import pytest
-
-#dim = 2
-#norm_const = 1 / np.sqrt(np.pi)
-
-#gauss_norms = [2/3, 10/(7*math.pi), 1/math.pi]
-#quintic_norms = [1/120, 7/(478*math.pi), 1/(120*math.pi)]
-
-#gauss_norm_2d = 10/(7*math.pi)
-#sigma_gauss = 1/math.pi
-
-gauss_norm_2d = 1/math.pi
-gauss_norm_3d = math.pi / math.sqrt(math.pi)
-
-quintic_norm_2d = 7/(478*math.pi)
-quintic_norm_3d = 1/(120*math.pi)
-
-eta_const = 1.0
 
 M = 2 # star mass
 R = 0.75 # star radius
 particle_dim = 32
 particle_mass = M / (particle_dim*particle_dim)
+
+kernel_radius = 3.0
+
 
 h_init = 0.1
 #sigma = norms[dim-1]
@@ -36,77 +23,6 @@ h_init = 0.1
 threads = 16
 tpb = (threads, threads)
 bpg = ( int(particle_dim / threads), int(particle_dim / threads) )
-
-kernel_radius = 3.0
-
-
-@cuda.jit('void(float32[:,:,:], float32, float32[:,:,:])')
-def calc_h_guesses(pos, kernel_r, h_guesses):
-    i, j = cuda.grid(2)
-
-    position = pos[i, j]
-    dim = len(position)
-
-    min_radius = np.inf
-    max_radius = 0.0
-
-    for i1 in range(pos.shape[0]):
-        for j1 in range(pos.shape[1]):
-
-            radius = 0.0
-            for d in range(dim):
-                radius += (position[d] - pos[i1, j1, d])**2
-
-            radius = math.sqrt(radius)
-
-            if radius > 0.0 and radius < min_radius:
-                min_radius = radius
-            if radius > max_radius:
-                max_radius = radius
-
-    h_guesses[i,j,0] = min_radius * (1 / kernel_r)
-    h_guesses[i,j,1] = (max_radius + 1e-15) * (1 / kernel_r)
-
-
-@cuda.jit('void(float32[:,:,:], float32, float32[:,:], float32[:,:])')
-def calc_zeta(pos, mass, smoothing_lengths, zeta):
-    i, j = cuda.grid(2)
-
-    position = pos[i, j]
-    dim = len(position)
-    h = smoothing_lengths[i,j]
-
-    rho = 0.0
-
-    for i1 in range(pos.shape[0]):
-        for j1 in range(pos.shape[1]):
-
-            radius = 0.0
-            for d in range(dim):
-                radius += (position[d] - pos[i1, j1, d])**2
-
-            radius = math.sqrt(radius)
-            w = w_quintic_gpu(radius, h, dim)
-            rho += particle_mass * w
-
-    zeta[i,j] = particle_mass * ( (eta_const / h)**dim ) - rho
-
-
-@cuda.jit('void(float32[:,:,:], float32[:,:])')
-def calc_midpoint(x, midpoint):
-    i, j = cuda.grid(2)
-    midpoint[i, j] = 0.5 * (x[i,j,0] + x[i,j,1])
-
-@cuda.jit('void(float32[:,:,:], float32[:,:], float32[:,:], float32[:,:])')
-def bisect_update(x, x_midpt, y_low, y_midpt):
-    i, j = cuda.grid(2)
-    
-    same_sign = y_low[i,j] * y_midpt[i, j] > 0
-
-    if same_sign:
-        x[i,j,0] = x_midpt[i,j]
-    else:
-        x[i,j,1] = x_midpt[i,j]
 
 
 @cuda.jit('void(float32[:,:], float32, int64, boolean, float32[:,:])')
@@ -160,33 +76,6 @@ def setup_data():
     yield pos_2d, pos_3d
 
 
-@pytest.mark.parametrize('spatial_dim', [2, 3])
-def test_h_guesses(setup_data, spatial_dim):
-    pos_2d, pos_3d = setup_data
-
-    h_guesses = cuda.to_device(np.zeros((particle_dim, particle_dim, 2), dtype='f4'))
-    zeta = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
-
-    pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
-
-    pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
-    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos_cpu, pos_cpu )
-
-    r_pmocz = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2)
-    r_pmocz[r_pmocz == 0] = np.nan
-
-    low_pmocz = np.nanmin(r_pmocz, axis=0) * (1 / kernel_radius)
-    high_pmocz = np.nanmax(r_pmocz, axis=0) * (1 / kernel_radius)
-
-    calc_h_guesses[bpg, tpb](pos_gpu, kernel_radius, h_guesses)
-    h_guesses_cpu = np.reshape(h_guesses.copy_to_host(), (particle_dim*particle_dim, 2))
-    low = h_guesses_cpu[:,0]
-    high = h_guesses_cpu[:,1]
-
-    assert all(np.isclose(low, low_pmocz))
-    assert all(np.isclose(high, high_pmocz))
-
-
 @pytest.mark.parametrize('spatial_dim, k', [
     (2, 'w'),
     (3, 'w'),
@@ -237,6 +126,31 @@ def test_kernel(setup_data, spatial_dim, k):
     
     assert diff[max_diff_idx] / max(gauss_res[max_diff_idx], quintic_res[max_diff_idx]) < 0.05
 
+@pytest.mark.parametrize('spatial_dim', [2, 3])
+def test_h_guesses(setup_data, spatial_dim):
+    pos_2d, pos_3d = setup_data
+
+    h_guesses = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
+    zeta = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
+
+    pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
+
+    pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
+    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos_cpu, pos_cpu )
+
+    r_pmocz = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2)
+    r_pmocz[r_pmocz == 0] = np.nan
+
+    low_pmocz = np.nanmin(r_pmocz, axis=0) * (1 / kernel_radius)
+    high_pmocz = np.nanmax(r_pmocz, axis=0) * (1 / kernel_radius)
+
+    calc_h_guesses[bpg, tpb](pos_gpu, kernel_radius, h_guesses)
+    h_guesses_cpu = np.reshape(h_guesses.copy_to_host(), (particle_dim*particle_dim, 3))
+    low = h_guesses_cpu[:,0]
+    high = h_guesses_cpu[:,2]
+
+    assert all(np.isclose(low, low_pmocz))
+    assert all(np.isclose(high, high_pmocz))
 
 
 @pytest.mark.parametrize('spatial_dim', [2, 3])
@@ -245,7 +159,7 @@ def test_zeta(setup_data, spatial_dim):
 
     pos_2d, pos_3d = setup_data
 
-    h_guesses = cuda.to_device(np.zeros((particle_dim, particle_dim, 2), dtype='f4'))
+    h_guesses = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
     zeta = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
@@ -255,11 +169,11 @@ def test_zeta(setup_data, spatial_dim):
     zeta_low = zeta.copy_to_host()
     assert np.all(zeta_low > 0.0)
 
-    calc_zeta[bpg, tpb](pos_gpu, particle_mass, h_guesses[:,:,1], zeta)
+    calc_zeta[bpg, tpb](pos_gpu, particle_mass, h_guesses[:,:,2], zeta)
     zeta_high = zeta.copy_to_host()
     assert np.all(zeta_high < 0.0)
 
-    all_hvals = np.linspace(h_guesses[:,:,0], h_guesses[:,:,1], n_samples).astype('f4')
+    all_hvals = np.linspace(h_guesses[:,:,0], h_guesses[:,:,2], n_samples).astype('f4')
 
     sign_test_vals = np.zeros((particle_dim, particle_dim, n_samples), dtype='f4')
 
@@ -278,7 +192,6 @@ def test_zeta(setup_data, spatial_dim):
     assert np.all(sign_change_sum == 1)
 
 
-
 @pytest.mark.parametrize('spatial_dim', [2, 3])
 def test_newton_method(setup_data, spatial_dim):
     pos_2d, pos_3d = setup_data
@@ -286,125 +199,26 @@ def test_newton_method(setup_data, spatial_dim):
     n_iter = 30
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
-    x = cuda.to_device(np.zeros((particle_dim, particle_dim, 2), dtype='f4'))
+    x = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
+    y = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
     calc_h_guesses[bpg, tpb](pos_gpu, kernel_radius, x)
-
-    y_low = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
-    y_high = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
-    
-    x_midpt = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
-    y_midpt = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
 
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
-    calc_h_guesses[bpg, tpb](pos_gpu, kernel_radius, x)
     
-    calc_zeta[bpg, tpb](pos_gpu, particle_mass, x[:,:,0], y_low)
-    calc_zeta[bpg, tpb](pos_gpu, particle_mass, x[:,:,1], y_high)
+    get_new_smoothing_lengths(pos_gpu, x, y, particle_mass, kernel_radius, tpb, bpg, n_iter=30)
+
+    midpt_y_cpu = np.abs(y.copy_to_host()[:,:,1])
+
+    #pos_cpu = pos_gpu.copy_to_host()
+    #new_smoothing_length = x.copy_to_host()[:,:,1]
+    #for i in range(particle_dim):
+    #    for j in range(particle_dim):
+    #        print('-----')
+    #        print(new_smoothing_length[i,j])
+    #        print(np.linalg.norm(pos_cpu[i,j]))
 
 
-    for i in range(n_iter):
-        calc_midpoint[bpg, tpb](x, x_midpt)
-        calc_zeta[bpg, tpb](pos_gpu, particle_mass, x_midpt, y_midpt)
-        bisect_update[bpg, tpb](x, x_midpt, y_low, y_midpt)
 
-    midpt_y_cpu = np.abs(y_midpt.copy_to_host())
-
+    assert not np.any(midpt_y_cpu == 0.0)
     assert np.all(midpt_y_cpu < h_init * 5e-2)
-
-
-
-
-if __name__ == '__main__':
-    np.random.seed(42)
-
-    pos_2d = cuda.to_device( R*0.0001 * np.random.randn(particle_dim, particle_dim, 2).astype('f4') )
-    pos_3d = cuda.to_device( R*0.0001 * np.random.randn(particle_dim, particle_dim, 3).astype('f4') )
-
-    test_newton_method(pos_2d, pos_3d, 2)
-
-
-    '''
-    def dwdq(rij, h, dim):
-
-        if dim == 2:
-            fac = (1.0 / math.pi) * 7.0 / 478.0
-        else:
-            fac = (1.0 / math.pi) * 1.0 / 120.0
-
-        h1 = 1. / h
-        q = rij * h1
-
-        # get the kernel normalizing factor
-        if dim == 1:
-            fac = fac * h1
-        elif dim == 2:
-            fac = fac * h1 * h1
-        elif dim == 3:
-            fac = fac * h1 * h1 * h1
-
-        tmp3 = 3. - q
-        tmp2 = 2. - q
-        tmp1 = 1. - q
-
-        # compute the gradient
-        #if (rij > 1e-12):
-        if (q > 3.0):
-            val = 0.0
-
-        elif (q > 2.0):
-            val = -5.0 * tmp3 * tmp3 * tmp3 * tmp3
-
-        elif (q > 1.0):
-            val = -5.0 * tmp3 * tmp3 * tmp3 * tmp3
-            val += 30.0 * tmp2 * tmp2 * tmp2 * tmp2
-        else:
-            val = -5.0 * tmp3 * tmp3 * tmp3 * tmp3
-            val += 30.0 * tmp2 * tmp2 * tmp2 * tmp2
-            val -= 75.0 * tmp1 * tmp1 * tmp1 * tmp1
-        #else:
-        #    val = 0.0
-
-        return val * fac
-
-    def gradW_gauss( r, h, dim ):
-        """
-        Gradient of the Gausssian Smoothing kernel (3D)
-        x     is a vector/matrix of x positions
-        y     is a vector/matrix of y positions
-        z     is a vector/matrix of z positions
-        h     is the smoothing length
-        wx, wy, wz     is the evaluated gradient
-        """
-        norm_const = 1 / np.sqrt(np.pi)
-                
-        h1 = 1.0 / h
-
-        n = (-2 * h1**2) * ( (h1 * norm_const) **dim ) * np.exp( -r**2 / h**2)
-        #n = -2 * np.exp( -r**2 / h**2) / h**5 / (np.pi)**(3/2)
-        #wx = n * x
-        #wy = n * y
-        #wz = n * z
-        
-        return n#wx, wy#, wz
-
-
-    pos = R*0.0001 * np.random.randn(particle_dim, particle_dim, 3).astype('f4')
-
-    pos = np.reshape(pos, (particle_dim*particle_dim, 3))
-
-    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos, pos )
-    pair_dists = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2).astype('f4')
-    r_pmocz = pair_dists[:particle_dim, :particle_dim].copy()
-
-    print(gradW_gauss(r_pmocz, h_init, 3))
-
-    #print(dwdq(r_pmocz, h_init, 3))
-
-    res = np.zeros(r_pmocz.shape)
-
-    for i in range(r_pmocz.shape[0]):
-        for j in range(r_pmocz.shape[1]):
-            res[i,j] = dwdq(r_pmocz[i,j], h_init, 3)
-    print(res)
-'''
