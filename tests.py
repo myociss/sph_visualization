@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.special import gamma
 from numba import cuda, float32, int8, from_dtype
 from kernels import w_gauss, dwdq_gauss, w_quintic_gpu, dwdq_quintic_gpu
+from gpu_core import calc_density, calc_dv_toystar
 from smoothing_length import calc_h_guesses, calc_midpoint, calc_zeta, bisect_update, get_new_smoothing_lengths
 
 import pytest
@@ -34,6 +35,103 @@ def kernel_gpu_test(radii, h, dim, is_grad, kernel_vals):
     else:
         w = w_quintic_gpu(radius, h, dim)
     kernel_vals[i,j] = w
+
+
+def density_pmocz( pos, h, dim ):
+    """
+    Get Density at sampling loctions from SPH particle distribution
+    r     is an M x 3 matrix of sampling locations
+    pos   is an N x 3 matrix of SPH particle positions
+    m     is the particle mass
+    h     is the smoothing length
+    rho   is M x 1 vector of densities
+    """
+	
+    M = pos.shape[0]
+	
+    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos, pos )
+    radius = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2).astype('f4')
+	
+    rho = np.sum( particle_mass * w_gauss(radius, h, dim), 1 ).reshape((M,1))
+	
+    return rho
+
+def pressure_pmocz(rho, eq_state_const, polytropic_idx):
+	"""
+	Equation of State
+	rho   vector of densities
+	k     equation of state constant
+	n     polytropic index
+	P     pressure
+	"""
+	
+	P = eq_state_const * rho**(1+1/polytropic_idx)
+	
+	return P
+
+def dv_pmocz( pos, vel, h, eq_state_const, polytropic_idx, lmbda, viscosity, dim ):
+    """
+    Calculate the acceleration on each SPH particle
+    pos   is an N x 3 matrix of positions
+    vel   is an N x 3 matrix of velocities
+    m     is the particle mass
+    h     is the smoothing length
+    k     equation of state constant
+    n     polytropic index
+    lmbda external force constant
+    nu    viscosity
+    a     is N x 3 matrix of accelerations
+    """
+    
+    N = pos.shape[0]
+    
+    # Calculate densities at the position of the particles
+    rho = density_pmocz( pos, h, dim )
+    
+    # Get the pressures
+    P = pressure_pmocz(rho, eq_state_const, polytropic_idx)
+
+    #print(P)
+    #print(eq_state_const)
+    #print(polytropic_idx)
+    #exit()
+    
+    # Get pairwise distances and gradients
+    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos, pos )
+    radius = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2).astype('f4')
+    
+    #dWx, dWy, dWz = gradW( dx, dy, dz, h )
+    dwdq = dwdq_gauss(radius, h, dim)
+
+    grad_w = np.zeros(radius.shape).astype('f4')
+
+    np.putmask(grad_w, radius > 1e-12, dwdq * (1./h) / radius )
+
+    dWx = x_dist * grad_w
+    dWy = y_dist * grad_w
+    dWz = z_dist * grad_w
+    
+    # Add Pressure contribution to accelerations
+    ax = - np.sum( particle_mass * ( P/rho**2 + P.T/rho.T**2  ) * dWx, 1).reshape((N,1))
+    ay = - np.sum( particle_mass * ( P/rho**2 + P.T/rho.T**2  ) * dWy, 1).reshape((N,1))
+
+    if dim == 3:
+        az = - np.sum( particle_mass * ( P/rho**2 + P.T/rho.T**2  ) * dWz, 1).reshape((N,1))
+        a = np.hstack((ax,ay,az))
+    else:
+        a = np.hstack((ax,ay))
+
+    #a = np.zeros(pos[:,:dim].shape)
+    
+    # Add external potential force
+    a -= lmbda * pos[:,:dim]
+    
+    # Add viscosity
+    a -= viscosity * vel[:,:dim]
+
+    #print(a)
+    
+    return a
 
 
 def pairwise_separations_pmocz( ri, rj ):
@@ -70,11 +168,67 @@ def pairwise_separations_pmocz( ri, rj ):
 def setup_data():
     np.random.seed(42)
 
-    pos_2d = cuda.to_device( R * np.random.randn(particle_dim, particle_dim, 2).astype('f4') )
-    pos_3d = cuda.to_device( R * np.random.randn(particle_dim, particle_dim, 3).astype('f4') )
+    pos_3d = cuda.to_device( R * (4/3) * np.random.randn(particle_dim, particle_dim, 3).astype('f4') )
+    pos_2d = cuda.to_device( R * (4/3) * np.random.randn(particle_dim, particle_dim, 2).astype('f4') )
 
     yield pos_2d, pos_3d
 
+
+
+@pytest.mark.parametrize('spatial_dim', [2, 3])
+def test_rho(setup_data, spatial_dim):
+    pos_2d, pos_3d = setup_data
+    pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
+
+    pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
+    rho_pmocz = density_pmocz(pos_cpu, h_init, spatial_dim)
+
+    smoothing_lengths = np.zeros((particle_dim, particle_dim)) + h_init
+    smoothing_lengths = cuda.to_device(smoothing_lengths.astype('f4'))
+    rho = cuda.to_device(np.zeros((particle_dim, particle_dim)).astype('f4'))
+    calc_density[bpg, tpb](pos_gpu, particle_mass, smoothing_lengths, rho)
+
+    rho_cpu = np.reshape(rho.copy_to_host(), (particle_dim*particle_dim,1))
+
+    ratio = np.abs(rho_cpu - rho_pmocz) / np.minimum(rho_cpu, rho_pmocz)    
+
+    assert np.all(ratio < 0.06)
+
+
+@pytest.mark.parametrize('spatial_dim', [2, 3])
+def test_dv(setup_data, spatial_dim):
+    pos_2d, pos_3d = setup_data
+    pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
+
+    eq_state_const = 0.1 * (R * 4/3)
+    polytropic_idx = 1
+    viscosity = 1
+
+    velocity = R * 0.2 * np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4')
+
+    lmbda_2d = 2*eq_state_const*np.pi**(-1/polytropic_idx) * ( ( (M*(1+polytropic_idx)) / (R**2) )**(1 + 1/polytropic_idx) ) / M
+    lmbda_3d = 2*eq_state_const*(1+polytropic_idx)*np.pi**(-3/(2*polytropic_idx)) * (M*gamma(5/2+polytropic_idx)/R**3/gamma(1+polytropic_idx))**(1/polytropic_idx) / R**2
+
+    lmbda = lmbda_2d if spatial_dim == 2 else lmbda_3d
+
+    pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
+
+    acc_pmocz = dv_pmocz(pos_cpu, np.reshape(velocity, (particle_dim*particle_dim,spatial_dim)), h_init, eq_state_const, polytropic_idx, lmbda, viscosity, spatial_dim)
+
+    acc = cuda.to_device( np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4') )# make sure setting dV[i,j,d] = 0 works
+    vel = cuda.to_device(velocity)
+
+    smoothing_lengths = np.zeros((particle_dim, particle_dim)) + h_init
+    smoothing_lengths = cuda.to_device(smoothing_lengths.astype('f4'))
+
+    rho = cuda.to_device(np.zeros((particle_dim, particle_dim)).astype('f4'))
+    calc_density[bpg, tpb](pos_gpu, particle_mass, smoothing_lengths, rho)
+
+    calc_dv_toystar[bpg, tpb](pos_gpu, vel, particle_mass, smoothing_lengths, eq_state_const, polytropic_idx, lmbda, viscosity, rho, acc)
+    acc_cpu = np.reshape(acc.copy_to_host(), acc_pmocz.shape)
+
+    assert np.all(np.abs(acc_pmocz - acc_cpu) < 0.2)
+    
 
 @pytest.mark.parametrize('spatial_dim, k', [
     (2, 'w'),
@@ -209,16 +363,6 @@ def test_newton_method(setup_data, spatial_dim):
     get_new_smoothing_lengths(pos_gpu, x, y, particle_mass, kernel_radius, tpb, bpg, n_iter=30)
 
     midpt_y_cpu = np.abs(y.copy_to_host()[:,:,1])
-
-    #pos_cpu = pos_gpu.copy_to_host()
-    #new_smoothing_length = x.copy_to_host()[:,:,1]
-    #for i in range(particle_dim):
-    #    for j in range(particle_dim):
-    #        print('-----')
-    #        print(new_smoothing_length[i,j])
-    #        print(np.linalg.norm(pos_cpu[i,j]))
-
-
 
     assert not np.any(midpt_y_cpu == 0.0)
     assert np.all(midpt_y_cpu < h_init * 5e-2)

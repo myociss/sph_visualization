@@ -1,4 +1,5 @@
 import math
+import os
 import matplotlib.pyplot as plt
 import numpy as np
 from numba import cuda
@@ -164,4 +165,5 @@ if __name__ == '__main__':
 
         ax1.scatter(r_vals, fprime_gauss, c='#ff0000')
         ax1.scatter(r_vals, fprime_quintic, c='#ff0000', marker='*')
-        plt.show()
+
+        plt.savefig(os.path.join(os.path.dirname(__file__), f'figures/kernels_{dim}d.png'))
