@@ -167,4 +167,4 @@ if __name__ == '__main__':
         ax1.scatter(r_vals, fprime_gauss, c='#ff0000')
         ax1.scatter(r_vals, fprime_quintic, c='#ff0000', marker='*')
 
-        plt.savefig(os.path.join(os.path.dirname(__file__), f'figures/kernels_{dim}d.png'))
+        plt.savefig(os.path.join(os.path.dirname(__file__), f'figures/kernels/kernels_{dim}d.png'))

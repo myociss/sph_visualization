@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from kernels import w_gauss, dwdq_gauss
 
 def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda, fig_name):
-    rr = np.zeros((100,3))
+    rr = np.zeros((100,pos.shape[1]))
     rlin = np.linspace(0,R,100)
     rr[:,0] =rlin
 
@@ -26,6 +26,7 @@ def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, l
 
     #cval = np.minimum((density-3*(R*4/3))/3,1).flatten()
     cval = dens
+    #cval = np.minimum((cval-3)/3,1).flatten()
 
     plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=plt.cm.jet, s=10, alpha=0.5)
     ax1.set(xlim=(-1.4 * (R * 4/3), 1.4 * (R * 4/3)), ylim=(-1.2 * (R * 4/3), 1.2 * (R * 4/3)))
