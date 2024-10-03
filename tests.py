@@ -6,11 +6,15 @@ from numba import cuda, float32, int8, from_dtype
 from kernels import w_gauss, dwdq_gauss, w_quintic_gpu, dwdq_quintic_gpu
 from gpu_core import calc_density, calc_dv_toystar
 from smoothing_length import calc_h_guesses, calc_midpoint, calc_zeta, bisect_update, get_new_smoothing_lengths
-
+from pmocz_functions import pairwise_separations, density, dv
 import pytest
 
 M = 2 # star mass
 R = 0.75 # star radius
+
+#R = 7000000 # white dwarf radius
+#solar_mass = 1.989e30
+#M=0.6*solar_mass # white dwarf mass
 particle_dim = 32
 particle_mass = M / (particle_dim*particle_dim)
 
@@ -37,133 +41,6 @@ def kernel_gpu_test(radii, h, dim, is_grad, kernel_vals):
     kernel_vals[i,j] = w
 
 
-def density_pmocz( pos, h, dim ):
-    """
-    Get Density at sampling loctions from SPH particle distribution
-    r     is an M x 3 matrix of sampling locations
-    pos   is an N x 3 matrix of SPH particle positions
-    m     is the particle mass
-    h     is the smoothing length
-    rho   is M x 1 vector of densities
-    """
-	
-    M = pos.shape[0]
-	
-    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos, pos )
-    radius = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2).astype('f4')
-	
-    rho = np.sum( particle_mass * w_gauss(radius, h, dim), 1 ).reshape((M,1))
-	
-    return rho
-
-def pressure_pmocz(rho, eq_state_const, polytropic_idx):
-	"""
-	Equation of State
-	rho   vector of densities
-	k     equation of state constant
-	n     polytropic index
-	P     pressure
-	"""
-	
-	P = eq_state_const * rho**(1+1/polytropic_idx)
-	
-	return P
-
-def dv_pmocz( pos, vel, h, eq_state_const, polytropic_idx, lmbda, viscosity, dim ):
-    """
-    Calculate the acceleration on each SPH particle
-    pos   is an N x 3 matrix of positions
-    vel   is an N x 3 matrix of velocities
-    m     is the particle mass
-    h     is the smoothing length
-    k     equation of state constant
-    n     polytropic index
-    lmbda external force constant
-    nu    viscosity
-    a     is N x 3 matrix of accelerations
-    """
-    
-    N = pos.shape[0]
-    
-    # Calculate densities at the position of the particles
-    rho = density_pmocz( pos, h, dim )
-    
-    # Get the pressures
-    P = pressure_pmocz(rho, eq_state_const, polytropic_idx)
-
-    #print(P)
-    #print(eq_state_const)
-    #print(polytropic_idx)
-    #exit()
-    
-    # Get pairwise distances and gradients
-    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos, pos )
-    radius = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2).astype('f4')
-    
-    #dWx, dWy, dWz = gradW( dx, dy, dz, h )
-    dwdq = dwdq_gauss(radius, h, dim)
-
-    grad_w = np.zeros(radius.shape).astype('f4')
-
-    np.putmask(grad_w, radius > 1e-12, dwdq * (1./h) / radius )
-
-    dWx = x_dist * grad_w
-    dWy = y_dist * grad_w
-    dWz = z_dist * grad_w
-    
-    # Add Pressure contribution to accelerations
-    ax = - np.sum( particle_mass * ( P/rho**2 + P.T/rho.T**2  ) * dWx, 1).reshape((N,1))
-    ay = - np.sum( particle_mass * ( P/rho**2 + P.T/rho.T**2  ) * dWy, 1).reshape((N,1))
-
-    if dim == 3:
-        az = - np.sum( particle_mass * ( P/rho**2 + P.T/rho.T**2  ) * dWz, 1).reshape((N,1))
-        a = np.hstack((ax,ay,az))
-    else:
-        a = np.hstack((ax,ay))
-
-    #a = np.zeros(pos[:,:dim].shape)
-    
-    # Add external potential force
-    a -= lmbda * pos[:,:dim]
-    
-    # Add viscosity
-    a -= viscosity * vel[:,:dim]
-
-    #print(a)
-    
-    return a
-
-
-def pairwise_separations_pmocz( ri, rj ):
-	"""
-	Get pairwise desprations between 2 sets of coordinates
-	ri    is an M x 3 matrix of positions
-	rj    is an N x 3 matrix of positions
-	dx, dy, dz   are M x N matrices of separations
-	"""
-	
-	M = ri.shape[0]
-	N = rj.shape[0]
-	
-	# positions ri = (x,y,z)
-	rix = ri[:,0].reshape((M,1))
-	riy = ri[:,1].reshape((M,1))
-
-    #if ri.shape[1] == 3:
-	riz = ri[:,2].reshape((M,1)) if ri.shape[1] == 3 else None
-	
-	# other set of points positions rj = (x,y,z)
-	rjx = rj[:,0].reshape((N,1))
-	rjy = rj[:,1].reshape((N,1))
-	rjz = rj[:,2].reshape((N,1)) if ri.shape[1] == 3 else None
-	
-	# matrices that store all pairwise particle separations: r_i - r_j
-	dx = rix - rjx.T
-	dy = riy - rjy.T
-	dz = riz - rjz.T if ri.shape[1] == 3 else np.zeros(dx.shape)
-	
-	return dx, dy, dz
-
 @pytest.fixture
 def setup_data():
     np.random.seed(42)
@@ -174,14 +51,13 @@ def setup_data():
     yield pos_2d, pos_3d
 
 
-
 @pytest.mark.parametrize('spatial_dim', [2, 3])
 def test_rho(setup_data, spatial_dim):
     pos_2d, pos_3d = setup_data
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
 
     pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
-    rho_pmocz = density_pmocz(pos_cpu, h_init, spatial_dim)
+    rho_pmocz = density(pos_cpu, h_init, particle_mass, spatial_dim)
 
     smoothing_lengths = np.zeros((particle_dim, particle_dim)) + h_init
     smoothing_lengths = cuda.to_device(smoothing_lengths.astype('f4'))
@@ -213,7 +89,7 @@ def test_dv(setup_data, spatial_dim):
 
     pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
 
-    acc_pmocz = dv_pmocz(pos_cpu, np.reshape(velocity, (particle_dim*particle_dim,spatial_dim)), h_init, eq_state_const, polytropic_idx, lmbda, viscosity, spatial_dim)
+    acc_pmocz = dv(pos_cpu, np.reshape(velocity, (particle_dim*particle_dim,spatial_dim)), h_init, eq_state_const, polytropic_idx, lmbda, viscosity, particle_mass, spatial_dim)
 
     acc = cuda.to_device( np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4') )# make sure setting dV[i,j,d] = 0 works
     vel = cuda.to_device(velocity)
@@ -245,7 +121,7 @@ def test_kernel(setup_data, spatial_dim, k):
     is_grad = k == 'grad_w'
 
     pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
-    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos_cpu, pos_cpu )
+    x_dist, y_dist, z_dist = pairwise_separations( pos_cpu, pos_cpu )
     pair_dists = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2).astype('f4')
     r_pmocz = pair_dists[:particle_dim, :particle_dim].copy()
 
@@ -280,6 +156,7 @@ def test_kernel(setup_data, spatial_dim, k):
     
     assert diff[max_diff_idx] / max(gauss_res[max_diff_idx], quintic_res[max_diff_idx]) < 0.05
 
+
 @pytest.mark.parametrize('spatial_dim', [2, 3])
 def test_h_guesses(setup_data, spatial_dim):
     pos_2d, pos_3d = setup_data
@@ -290,7 +167,7 @@ def test_h_guesses(setup_data, spatial_dim):
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
 
     pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
-    x_dist, y_dist, z_dist = pairwise_separations_pmocz( pos_cpu, pos_cpu )
+    x_dist, y_dist, z_dist = pairwise_separations( pos_cpu, pos_cpu )
 
     r_pmocz = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2)
     r_pmocz[r_pmocz == 0] = np.nan
@@ -337,6 +214,9 @@ def test_zeta(setup_data, spatial_dim):
         zeta_cpu = zeta.copy_to_host()
         sign_test_vals[:,:,i] = zeta_cpu
 
+    #plt.scatter(all_hvals[:,19,21], sign_test_vals[19, 21])
+    #plt.show()
+
 
     asign = np.sign(sign_test_vals)
     sign_change = ((np.roll(asign, 1) - asign) != 0).astype(int)[:,:,1:]
@@ -344,6 +224,7 @@ def test_zeta(setup_data, spatial_dim):
     sign_change_sum = np.sum(sign_change, axis=-1)
 
     assert np.all(sign_change_sum == 1)
+
 
 
 @pytest.mark.parametrize('spatial_dim', [2, 3])
@@ -357,12 +238,36 @@ def test_newton_method(setup_data, spatial_dim):
     y = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
     calc_h_guesses[bpg, tpb](pos_gpu, kernel_radius, x)
 
+    all_hvals = np.linspace(x[:,:,0], x[:,:,2], n_samples).astype('f4')
+
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
     
     get_new_smoothing_lengths(pos_gpu, x, y, particle_mass, kernel_radius, tpb, bpg, n_iter=30)
 
-    midpt_y_cpu = np.abs(y.copy_to_host()[:,:,1])
+    midpt_y_cpu = y.copy_to_host()[:,:,1]
+    midpt_x_cpu = x.copy_to_host()[:,:,1]
 
-    assert not np.any(midpt_y_cpu == 0.0)
-    assert np.all(midpt_y_cpu < h_init * 5e-2)
+    '''
+    sign_test_vals = np.zeros((particle_dim, particle_dim, n_samples), dtype='f4')
+
+    zeta = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
+
+    for i in range(n_samples):
+        h_iter = cuda.to_device(np.ascontiguousarray(all_hvals[i,:,:]))
+        calc_zeta[bpg, tpb](pos_gpu, particle_mass, h_iter, zeta)
+        zeta_cpu = zeta.copy_to_host()
+        sign_test_vals[:,:,i] = zeta_cpu
+
+    problem_idx = np.unravel_index(np.argmax(np.abs(midpt_y_cpu)), midpt_y_cpu.shape)
+    print(problem_idx)
+    print(midpt_y_cpu[problem_idx])
+    print(midpt_x_cpu[problem_idx])
+    fig = plt.figure()
+    ax1 = fig.add_subplot(111)
+    ax1.scatter(all_hvals[:,problem_idx[0],problem_idx[1]], sign_test_vals[problem_idx])
+    ax1.scatter([midpt_x_cpu[problem_idx]], [midpt_y_cpu[problem_idx]])
+    plt.show()
+    '''
+
+    assert np.all(np.abs(midpt_y_cpu) < R * 0.001) # error as a percentage of radius

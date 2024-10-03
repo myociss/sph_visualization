@@ -42,6 +42,7 @@ def gradw_gauss(r, h, dim):
     return tmp
 
 def w_quintic(r, h, dim):
+    
     # from phantom sph: https://pysph.readthedocs.io/en/latest/_modules/pysph/base/kernels.html
     if dim == 1:
         sigma = quintic_norm_1d

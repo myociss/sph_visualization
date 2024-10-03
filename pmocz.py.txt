@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import gamma
-from kernels import dwdq_gauss#, w_gauss
+from kernels import w_gauss, dwdq_gauss
 
 """
 Create Your Own Smoothed-Particle-Hydrodynamics Simulation (With Python)
@@ -88,9 +88,12 @@ def getDensity( r, pos, m, h ):
     
     M = r.shape[0]
     
-    dx, dy, dz = getPairwiseSeparations( r, pos );
+    dx, dy, dz = getPairwiseSeparations( r, pos )
+
+    radius = np.sqrt(dx**2 + dy**2 + dz**2)
     
-    rho = np.sum( m * W(dx, dy, dz, h), 1 ).reshape((M,1))
+    #rho = np.sum( m * W(dx, dy, dz, h), 1 ).reshape((M,1))
+    rho = np.sum( m * w_gauss(radius, h, 3), 1 ).reshape((M,1))
     
     return rho
     
@@ -109,6 +112,73 @@ def getPressure(rho, k, n):
     return P
     
 
+def getAcc( pos, vel, m, h, eq_state_const, polytropic_idx, lmbda, viscosity ):
+    """
+    Calculate the acceleration on each SPH particle
+    pos   is an N x 3 matrix of positions
+    vel   is an N x 3 matrix of velocities
+    m     is the particle mass
+    h     is the smoothing length
+    k     equation of state constant
+    n     polytropic index
+    lmbda external force constant
+    nu    viscosity
+    a     is N x 3 matrix of accelerations
+    """
+
+    dim = 3
+    
+    N = pos.shape[0]
+    
+    # Calculate densities at the position of the particles
+    rho = getDensity( pos, pos, m, h )
+    
+    # Get the pressures
+    P = getPressure(rho, eq_state_const, polytropic_idx)
+
+    #print(P)
+    #print(eq_state_const)
+    #print(polytropic_idx)
+    #exit()
+    
+    # Get pairwise distances and gradients
+    x_dist, y_dist, z_dist = getPairwiseSeparations( pos, pos )
+    radius = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2).astype('f4')
+    
+    #dWx, dWy, dWz = gradW( dx, dy, dz, h )
+    dwdq = dwdq_gauss(radius, h, dim)
+
+    grad_w = np.zeros(radius.shape).astype('f4')
+
+    np.putmask(grad_w, radius > 1e-12, dwdq * (1./h) / radius )
+
+    dWx = x_dist * grad_w
+    dWy = y_dist * grad_w
+    dWz = z_dist * grad_w
+    
+    # Add Pressure contribution to accelerations
+    ax = - np.sum( m * ( P/rho**2 + P.T/rho.T**2  ) * dWx, 1).reshape((N,1))
+    ay = - np.sum( m * ( P/rho**2 + P.T/rho.T**2  ) * dWy, 1).reshape((N,1))
+
+    if dim == 3:
+        az = - np.sum( m * ( P/rho**2 + P.T/rho.T**2  ) * dWz, 1).reshape((N,1))
+        a = np.hstack((ax,ay,az))
+    else:
+        a = np.hstack((ax,ay))
+
+    #a = np.zeros(pos[:,:dim].shape)
+    
+    # Add external potential force
+    a -= lmbda * pos[:,:dim]
+    
+    # Add viscosity
+    a -= viscosity * vel[:,:dim]
+
+    #print(a)
+    
+    return a
+
+'''
 def getAcc( pos, vel, m, h, k, n, lmbda, nu ):
     """
     Calculate the acceleration on each SPH particle
@@ -130,34 +200,23 @@ def getAcc( pos, vel, m, h, k, n, lmbda, nu ):
     
     # Get the pressures
     P = getPressure(rho, k, n)
-
-    #print(P)
-    #print(P)
-    #print(k)
-    #print(n)
-    #exit()
     
     # Get pairwise distances and gradients
     dx, dy, dz = getPairwiseSeparations( pos, pos )
-    radius = np.sqrt(dx**2 + dy**2 + dz**2).astype('f4')
-    dwdq = dwdq_gauss(radius, h, 3)
-    grad_w = np.zeros(radius.shape)
-
-    np.putmask(grad_w, radius > 1e-12, dwdq * (1./h) / radius )
-
     #dWx, dWy, dWz = gradW( dx, dy, dz, h )
 
-    dWx = grad_w * dx
-    dWy = grad_w * dy
-    dWz = grad_w * dz
+    radius = np.sqrt(dx**2 + dy**2 + dz**2)
+    dwdq = dwdq_gauss(radius, h, 3)
+    grad = np.zeros(dwdq.shape)
+    np.putmask(grad, radius > 1e-12, dwdq * (1./h) / radius)
+    dWx = grad * dx
+    dWy = grad * dy
+    dWz = grad * dz
     
     # Add Pressure contribution to accelerations
     ax = - np.sum( m * ( P/rho**2 + P.T/rho.T**2  ) * dWx, 1).reshape((N,1))
     ay = - np.sum( m * ( P/rho**2 + P.T/rho.T**2  ) * dWy, 1).reshape((N,1))
     az = - np.sum( m * ( P/rho**2 + P.T/rho.T**2  ) * dWz, 1).reshape((N,1))
-
-    #print(ax)
-    #exit()
     
     # pack together the acceleration components
     a = np.hstack((ax,ay,az))
@@ -169,6 +228,7 @@ def getAcc( pos, vel, m, h, k, n, lmbda, nu ):
     a -= nu * vel
     
     return a
+'''
     
 
 
@@ -176,7 +236,7 @@ def main():
     """ SPH simulation """
     
     # Simulation parameters
-    N         = 32*32    # Number of particles
+    N         = 400    # Number of particles
     t         = 0      # current time of the simulation
     tEnd      = 12     # time at which simulation ends
     dt        = 0.04   # timestep
@@ -190,25 +250,14 @@ def main():
     
     # Generate Initial Conditions
     np.random.seed(42)            # set the random number generator seed
-
-    pos   = np.reshape(np.random.randn(32,32,3), (32*32,3))   # randomly selected positions and velocities
     
     lmbda = 2*k*(1+n)*np.pi**(-3/(2*n)) * (M*gamma(5/2+n)/R**3/gamma(1+n))**(1/n) / R**2  # ~ 2.01
     m     = M/N                    # single particle mass
+    pos   = np.random.randn(N,3)   # randomly selected positions and velocities
     vel   = np.zeros(pos.shape)
     
     # calculate initial gravitational accelerations
     acc = getAcc( pos, vel, m, h, k, n, lmbda, nu )
-
-    #print(getDensity(pos,pos,m,h))
-    #print(pos)
-    #print(m)
-    print(acc)
-    exit()
-
-    #print(acc)
-    
-    #exit()
     
     # number of timesteps
     Nt = int(np.ceil(tEnd/dt))

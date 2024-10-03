@@ -97,33 +97,3 @@ def update_pos_vel_halfstep(pos, vel, dV, dt):
 
         pos[i, j, 0, d] = pos_dim + 0.5 * dt * vel_dim
         vel[i, j, 0, d] = vel_dim + 0.5 * dt * dV_dim
-    '''
-    x_pos = pos[i, j, 0, 0]
-    y_pos = pos[i, j, 0, 1]
-    z_pos = pos[i, j, 0, 2]
-
-    vel_x = vel[i,j,0,0]
-    vel_y = vel[i,j,0,1]
-    vel_z = vel[i,j,0,2]
-
-    dV_x = dV[i,j,0]
-    dV_y = dV[i,j,1]
-    dV_z = dV[i,j,2]
-
-    # save values
-    pos[i,j,1,0] = x_pos
-    pos[i,j,1,1] = y_pos
-    pos[i,j,1,2] = z_pos
-
-    vel[i,j,1,0] = vel_x
-    vel[i,j,1,1] = vel_y
-    vel[i,j,1,2] = vel_z
-
-    pos[i, j, 0, 0] = x_pos + 0.5 * dt * vel_x
-    pos[i, j, 0, 1] = y_pos + 0.5 * dt * vel_y
-    pos[i, j, 0, 2] = z_pos + 0.5 * dt * vel_z
-
-    vel[i, j, 0, 0] = vel_x + 0.5 * dt * dV_x
-    vel[i, j, 0, 1] = vel_y + 0.5 * dt * dV_y
-    vel[i, j, 0, 2] = vel_z + 0.5 * dt * dV_z
-    '''
