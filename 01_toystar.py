@@ -1,10 +1,11 @@
 import math
 import numpy as np
 import matplotlib.pyplot as plt
+from numba import cuda
 from scipy.special import gamma
 from gpu_core import calc_dv_toystar, calc_density, update_pos_vel_halfstep
 from smoothing_length import calc_h_guesses, calc_midpoint, calc_zeta, bisect_update, get_new_smoothing_lengths
-from numba import cuda
+from pmocz_functions import plot_frame
 
 
 def getPairwiseSeparations( ri, rj ):
@@ -193,7 +194,7 @@ d_density_smoothing = cuda.to_device(np.zeros((dim, dim, 3), dtype='f4'))
 
 N         = dim*dim    # Number of particles
 t         = 0      # current time of the simulation
-tEnd      = 12     # time at which simulation ends
+tEnd      = 1#12     # time at which simulation ends
 #dt        = 0.01   # timestep
 dt = 0.01
 
@@ -275,26 +276,8 @@ for i in range(1, steps):
 
     get_new_smoothing_lengths(d_pos[:,:,0,:], x, y, particle_mass, 3.0, tpb, bpg, n_iter=20)
     smoothing_length = x[:,:,1]
-
     smoothing_length_y_cpu = y[:,:,1].copy_to_host()
-
     assert np.all(np.abs(smoothing_length_y_cpu) < 0.001 * R)
-
-    '''
-    for j in range(15):
-
-        calc_density_smoothing[bpg, tpb](d_pos, particle_mass, d_density_smoothing)
-
-        if j == 14:
-
-            d_tex = d_density_smoothing.copy_to_host()
-
-            print(np.min(d_tex[:,:,1]))
-            print(np.max(d_tex[:,:,1]))
-
-            print(np.min(d_tex[:,:,2]))
-            print(np.max(d_tex[:,:,2]))
-    '''
     
 
     calc_dv_toystar[bpg, tpb](d_pos[:,:,0,:], d_vel[:,:,0,:], particle_mass, smoothing_length, eq_state_const, polytropic_idx, lmbda, viscosity, d_rho, d_dV)
@@ -313,12 +296,7 @@ density = d_rho.copy_to_host()
 
 
 pos = all_pos[:,:,-1]
-
-with open('last_frame_pos.npy','wb') as f:
-    np.save(f, pos)
-
-with open('last_frame_density.npy','wb') as f:
-    np.save(f, density)
+plot_frame(pos, density, R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda, 'toystar_3d.png')
 
 '''
 x_pos = pos[0,0,0]

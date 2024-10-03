@@ -3,9 +3,50 @@
 
 import math
 import numpy as np
+import matplotlib.pyplot as plt
 from kernels import w_gauss, dwdq_gauss
 
-def density( pos, h, particle_mass, dim ):
+def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda, fig_name):
+    rr = np.zeros((100,3))
+    rlin = np.linspace(0,R,100)
+    rr[:,0] =rlin
+
+    rho_analytic = (lmbda * (R**2 - rlin**2)/(2*eq_state_const*(1+polytropic_idx)))**polytropic_idx
+
+    fig = plt.figure(figsize=(4,5), dpi=80)
+    grid = plt.GridSpec(3, 1, wspace=0.0, hspace=0.3)
+    ax1 = plt.subplot(grid[0:2,0])
+    ax2 = plt.subplot(grid[2,0])
+    #exit()
+
+
+
+    plt.sca(ax1)
+    plt.cla()
+
+    #cval = np.minimum((density-3*(R*4/3))/3,1).flatten()
+    cval = dens
+
+    plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=plt.cm.jet, s=10, alpha=0.5)
+    ax1.set(xlim=(-1.4 * (R * 4/3), 1.4 * (R * 4/3)), ylim=(-1.2 * (R * 4/3), 1.2 * (R * 4/3)))
+    ax1.set_aspect('equal', 'box')
+    ax1.set_xticks([-(R * 4/3),0,(R * 4/3)])
+    ax1.set_yticks([-(R * 4/3),0,(R * 4/3)])
+    ax1.set_facecolor('black')
+    ax1.set_facecolor((.1,.1,.1))
+                
+    plt.sca(ax2)
+    plt.cla()
+    #ax2.set(xlim=(0, R), ylim=(0, 3e9))
+    #ax2.set_aspect(0.1)
+    plt.plot(rlin, rho_analytic, color='gray', linewidth=2)
+    rho_radial = density( pos, h, particle_mass, pos.shape[1], rr=rr )
+    plt.plot(rlin, rho_radial, color='blue')
+    plt.savefig(fig_name)
+    plt.show()
+
+
+def density( pos, h, particle_mass, dim, rr=None ):
     """
     Get Density at sampling loctions from SPH particle distribution
     r     is an M x 3 matrix of sampling locations
@@ -14,10 +55,13 @@ def density( pos, h, particle_mass, dim ):
     h     is the smoothing length
     rho   is M x 1 vector of densities
     """
+
+    if rr is None:
+        rr = pos
 	
-    M = pos.shape[0]
+    M = rr.shape[0]
 	
-    x_dist, y_dist, z_dist = pairwise_separations( pos, pos )
+    x_dist, y_dist, z_dist = pairwise_separations( rr, pos )
     radius = np.sqrt(x_dist**2 + y_dist**2 + z_dist**2).astype('f4')
 	
     rho = np.sum( particle_mass * w_gauss(radius, h, dim), 1 ).reshape((M,1))
