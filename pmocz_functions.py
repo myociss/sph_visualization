@@ -4,9 +4,20 @@
 import math
 import numpy as np
 import matplotlib.pyplot as plt
+from PIL import Image
 from kernels import w_gauss, dwdq_gauss
 
-def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda, fig_name):
+
+def get_img(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda):
+    fig = plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda)
+    fig.canvas.draw()
+    img = Image.frombytes('RGB', fig.canvas.get_width_height(), fig.canvas.tostring_rgb())
+    #imgs.append(img)
+    plt.close(fig)
+    return img
+
+
+def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda):#, fig_name):
     rr = np.zeros((100,pos.shape[1]))
     rlin = np.linspace(0,R,100)
     rr[:,0] =rlin
@@ -24,11 +35,12 @@ def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, l
     plt.sca(ax1)
     plt.cla()
 
-    #cval = np.minimum((density-3*(R*4/3))/3,1).flatten()
-    cval = dens
+    cval = np.minimum((dens-3*(R*4/3))/3, 3 * R*4/3).flatten()
+    #cval = dens
     #cval = np.minimum((cval-3)/3,1).flatten()
 
-    plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=plt.cm.jet, s=10, alpha=0.5)
+    #plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=plt.cm.jet, s=10, alpha=0.5)
+    plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=plt.cm.autumn, s=10, alpha=0.5)
     ax1.set(xlim=(-1.4 * (R * 4/3), 1.4 * (R * 4/3)), ylim=(-1.2 * (R * 4/3), 1.2 * (R * 4/3)))
     ax1.set_aspect('equal', 'box')
     ax1.set_xticks([-(R * 4/3),0,(R * 4/3)])
@@ -43,8 +55,9 @@ def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, l
     plt.plot(rlin, rho_analytic, color='gray', linewidth=2)
     rho_radial = density( pos, h, particle_mass, pos.shape[1], rr=rr )
     plt.plot(rlin, rho_radial, color='blue')
-    plt.savefig(fig_name)
-    plt.show()
+    #plt.savefig(fig_name)
+    #plt.show()
+    return fig
 
 
 def density( pos, h, particle_mass, dim, rr=None ):

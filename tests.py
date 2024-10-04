@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.special import gamma
 from numba import cuda, float32, int8, from_dtype
 from kernels import w_gauss, dwdq_gauss, w_quintic_gpu, dwdq_quintic_gpu
-from gpu_core import calc_density, calc_dv_toystar
+from astro_core import calc_density, calc_dv_toystar
 from smoothing_length import calc_h_guesses, calc_midpoint, calc_zeta, bisect_update, get_new_smoothing_lengths
 from pmocz_functions import pairwise_separations, density, dv
 import pytest

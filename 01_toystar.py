@@ -4,9 +4,12 @@ import os
 import matplotlib.pyplot as plt
 from numba import cuda
 from scipy.special import gamma
-from gpu_core import calc_dv_toystar, calc_density, update_pos_vel_halfstep
+from PIL import Image
+
+from astro_core import calc_dv_toystar, calc_density, update_pos_vel_halfstep
 from smoothing_length import calc_h_guesses, calc_midpoint, calc_zeta, bisect_update, get_new_smoothing_lengths
-from pmocz_functions import plot_frame
+from pmocz_functions import plot_frame, get_img
+
 
 # demonstrates formation of a toy star integrated using a quintic spline kernel and adaptive smoothing length in 2D and 3D
 
@@ -15,17 +18,18 @@ M = 2 # star mass
 polytropic_idx = 3/2
 
 
-h_init = 0.1 * (R * 4/3) #0.1 * (R * 4/3)    # smoothing length
-eq_state_const = 0.1 * (R * 4/3)   # equation of state constant
-viscosity = 1      # damping
+h_init = 0.1 * (R * 4/3)    # smoothing length
+eq_state_const = 0.1 * (R * 4/3) # equation of state constant
+viscosity = 1 # damping
 
 lmbda_2d = 2*eq_state_const*np.pi**(-1/polytropic_idx) * ( ( (M*(1+polytropic_idx)) / (R**2) )**(1 + 1/polytropic_idx) ) / M
 lmbda_3d = 2*eq_state_const*(1+polytropic_idx)*np.pi**(-3/(2*polytropic_idx)) * (M*gamma(5/2+polytropic_idx)/R**3/gamma(1+polytropic_idx))**(1/polytropic_idx) / R**2
 
-t         = 0      # current time of the simulation
-tEnd      = 12     # time at which simulation ends
-#dt        = 0.01   # timestep
-dt = 0.005#0.01
+#t = 0      # current time of the simulation
+tEnd = 12
+dt = 0.005
+
+#dt = 0.005#0.01
 
 configs = [
     (2, 16, lmbda_2d),
@@ -34,18 +38,15 @@ configs = [
 
 for spatial_dim, particle_dim, lmbda in configs:
 
-    #particle_dim = 32
     threads = 16
     tpb = (threads, threads)
     bpg = ( int(particle_dim / threads), int(particle_dim / threads) )
 
 
-    N         = particle_dim*particle_dim    # Number of particles
+    N = particle_dim*particle_dim    # Number of particles
 
-    smoothing_length = np.zeros((particle_dim, particle_dim)) + h_init
+    smoothing_length = np.zeros((particle_dim, particle_dim)) #+ h_init
     smoothing_length = cuda.to_device(smoothing_length.astype('f4'))
-
-    #spatial_dim = 3
 
     init_pos = (R * 4/3) * np.random.randn(particle_dim, particle_dim, 2, spatial_dim).astype('f4')
     d_pos = cuda.to_device(init_pos)
@@ -56,21 +57,15 @@ for spatial_dim, particle_dim, lmbda in configs:
 
     particle_mass = M/N
 
-    #lmbda_2d = 2*eq_state_const*np.pi**(-1/polytropic_idx) * ( ( (M*(1+polytropic_idx)) / (R**2) )**(1 + 1/polytropic_idx) ) / M
-    #lmbda_3d = 2*eq_state_const*(1+polytropic_idx)*np.pi**(-3/(2*polytropic_idx)) * (M*gamma(5/2+polytropic_idx)/R**3/gamma(1+polytropic_idx))**(1/polytropic_idx) / R**2
-
-    #lmbda = lmbda_2d if spatial_dim == 2 else lmbda_3d
-
-    #print(lmbda)
-
     steps = int(tEnd/dt)
 
     all_pos = np.zeros((N, spatial_dim, steps), dtype='f4')
-
-    all_pos[:,:, 0] = init_pos[:,:,0,:].reshape((N, spatial_dim))
+    all_rho = np.zeros((N, steps), dtype='f4')
 
     x = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
     y = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
+
+    imgs = []
 
     for i in range(1, steps):
         print(i)
@@ -88,11 +83,16 @@ for spatial_dim, particle_dim, lmbda in configs:
 
         update_pos_vel_halfstep[bpg, tpb](d_pos, d_vel, d_dV, dt)
 
-        all_pos[:,:, i] = (d_pos.copy_to_host()[:,:,0,:]).reshape((N, spatial_dim))
+        all_pos[:,:,i] = (d_pos.copy_to_host()[:,:,0,:]).reshape((N, spatial_dim))
+        all_rho[:,i] = (d_rho.copy_to_host()).reshape((N,))
 
+        '''
+        fig = plot_frame(all_pos[:,:,i], all_rho[:,i], R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda)
+        fig.canvas.draw()
+        img = Image.frombytes('RGB', fig.canvas.get_width_height(), fig.canvas.tostring_rgb())
+        imgs.append(img)
+        '''
+        imgs.append(get_img(all_pos[:,:,i], all_rho[:,i], R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda))
 
-    density = d_rho.copy_to_host()
-
-    pos = all_pos[:,:,-1]
-    path = os.path.join(os.path.dirname(__file__), f'figures/01_toystar/toystar_{spatial_dim}d.png')
-    plot_frame(pos, density, R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda, path)
+    path = os.path.join(os.path.dirname(__file__), f'figures/01_toystar/toystar_{spatial_dim}d.gif')
+    imgs[0].save(path, save_all=True, append_images=imgs[1:], duration=20, loop=0)
