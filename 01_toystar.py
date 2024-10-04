@@ -25,11 +25,8 @@ viscosity = 1 # damping
 lmbda_2d = 2*eq_state_const*np.pi**(-1/polytropic_idx) * ( ( (M*(1+polytropic_idx)) / (R**2) )**(1 + 1/polytropic_idx) ) / M
 lmbda_3d = 2*eq_state_const*(1+polytropic_idx)*np.pi**(-3/(2*polytropic_idx)) * (M*gamma(5/2+polytropic_idx)/R**3/gamma(1+polytropic_idx))**(1/polytropic_idx) / R**2
 
-#t = 0      # current time of the simulation
 tEnd = 12
 dt = 0.005
-
-#dt = 0.005#0.01
 
 configs = [
     (2, 16, lmbda_2d),
@@ -73,10 +70,14 @@ for spatial_dim, particle_dim, lmbda in configs:
         update_pos_vel_halfstep[bpg, tpb](d_pos, d_vel, d_dV, dt)
         calc_density[bpg, tpb](d_pos[:,:,0,:], particle_mass, smoothing_length, d_rho)
 
-        get_new_smoothing_lengths(d_pos[:,:,0,:], x, y, particle_mass, 3.0, tpb, bpg, n_iter=30)
+        get_new_smoothing_lengths(d_pos[:,:,0,:], x, y, particle_mass, 3.0, tpb, bpg, n_iter=15)
         smoothing_length = x[:,:,1]
-        smoothing_length_y_cpu = y[:,:,1].copy_to_host()
-        assert np.all(np.abs(smoothing_length_y_cpu) < 0.001 * R)
+        #smoothing_length_y_cpu = y[:,:,1].copy_to_host()
+        #assert np.all(np.abs(smoothing_length_y_cpu) < 0.001 * R)
+
+        x_cpu = x.copy_to_host()
+        delta_ratio = np.max(np.abs(x_cpu[:,:,2] - x_cpu[:,:,0]) / h_init)
+        assert np.all(delta_ratio < 0.02 * h_init)
         
 
         calc_dv_toystar[bpg, tpb](d_pos[:,:,0,:], d_vel[:,:,0,:], particle_mass, smoothing_length, eq_state_const, polytropic_idx, lmbda, viscosity, d_rho, d_dV)
@@ -94,5 +95,10 @@ for spatial_dim, particle_dim, lmbda in configs:
         '''
         imgs.append(get_img(all_pos[:,:,i], all_rho[:,i], R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda))
 
-    path = os.path.join(os.path.dirname(__file__), f'figures/01_toystar/toystar_{spatial_dim}d.gif')
-    imgs[0].save(path, save_all=True, append_images=imgs[1:], duration=20, loop=0)
+    gif_path = os.path.join(os.path.dirname(__file__), f'figures/01_toystar/toystar_{spatial_dim}d.gif')
+    imgs[0].save(gif_path, save_all=True, append_images=imgs[1:], duration=20, loop=0)
+
+    png_path = os.path.join(os.path.dirname(__file__), f'figures/01_toystar/toystar_{spatial_dim}d.png')
+    fig = plot_frame(all_pos[:,:,-1], all_rho[:,-1], R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda, colormap='jet')
+    plt.savefig(png_path)
+    plt.close(fig)

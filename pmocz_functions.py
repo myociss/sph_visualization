@@ -17,7 +17,7 @@ def get_img(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbd
     return img
 
 
-def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda):#, fig_name):
+def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda, colormap='autumn'):
     rr = np.zeros((100,pos.shape[1]))
     rlin = np.linspace(0,R,100)
     rr[:,0] =rlin
@@ -40,7 +40,8 @@ def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, l
     #cval = np.minimum((cval-3)/3,1).flatten()
 
     #plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=plt.cm.jet, s=10, alpha=0.5)
-    plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=plt.cm.autumn, s=10, alpha=0.5)
+    cmap = plt.cm.autumn if colormap == 'autumn' else plt.cm.jet
+    plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=cmap, s=10, alpha=0.5)
     ax1.set(xlim=(-1.4 * (R * 4/3), 1.4 * (R * 4/3)), ylim=(-1.2 * (R * 4/3), 1.2 * (R * 4/3)))
     ax1.set_aspect('equal', 'box')
     ax1.set_xticks([-(R * 4/3),0,(R * 4/3)])
@@ -50,8 +51,8 @@ def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, l
                 
     plt.sca(ax2)
     plt.cla()
-    #ax2.set(xlim=(0, R), ylim=(0, 3e9))
-    #ax2.set_aspect(0.1)
+    ax2.set(xlim=(0, R), ylim=(0, 3 * R*4/3))
+    ax2.set_aspect(0.1)
     plt.plot(rlin, rho_analytic, color='gray', linewidth=2)
     rho_radial = density( pos, h, particle_mass, pos.shape[1], rr=rr )
     plt.plot(rlin, rho_radial, color='blue')

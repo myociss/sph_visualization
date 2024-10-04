@@ -214,10 +214,6 @@ def test_zeta(setup_data, spatial_dim):
         zeta_cpu = zeta.copy_to_host()
         sign_test_vals[:,:,i] = zeta_cpu
 
-    #plt.scatter(all_hvals[:,19,21], sign_test_vals[19, 21])
-    #plt.show()
-
-
     asign = np.sign(sign_test_vals)
     sign_change = ((np.roll(asign, 1) - asign) != 0).astype(int)[:,:,1:]
 
@@ -240,13 +236,17 @@ def test_newton_method(setup_data, spatial_dim):
 
     all_hvals = np.linspace(x[:,:,0], x[:,:,2], n_samples).astype('f4')
 
-
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
     
     get_new_smoothing_lengths(pos_gpu, x, y, particle_mass, kernel_radius, tpb, bpg, n_iter=30)
 
-    midpt_y_cpu = y.copy_to_host()[:,:,1]
-    midpt_x_cpu = x.copy_to_host()[:,:,1]
+    #midpt_y_cpu = y.copy_to_host()[:,:,1]
+    #midpt_x_cpu = x.copy_to_host()[:,:,1]
+
+    x_cpu = x.copy_to_host()
+
+    delta_ratio = np.max(np.abs(x_cpu[:,:,2] - x_cpu[:,:,0]) / R)
+    assert np.all(delta_ratio < 0.001 * R) # error as a percentage of radius
 
     '''
     sign_test_vals = np.zeros((particle_dim, particle_dim, n_samples), dtype='f4')
@@ -269,5 +269,3 @@ def test_newton_method(setup_data, spatial_dim):
     ax1.scatter([midpt_x_cpu[problem_idx]], [midpt_y_cpu[problem_idx]])
     plt.show()
     '''
-
-    assert np.all(np.abs(midpt_y_cpu) < R * 0.001) # error as a percentage of radius
