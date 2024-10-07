@@ -87,12 +87,6 @@ for spatial_dim, particle_dim, lmbda in configs:
         all_pos[:,:,i] = (d_pos.copy_to_host()[:,:,0,:]).reshape((N, spatial_dim))
         all_rho[:,i] = (d_rho.copy_to_host()).reshape((N,))
 
-        '''
-        fig = plot_frame(all_pos[:,:,i], all_rho[:,i], R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda)
-        fig.canvas.draw()
-        img = Image.frombytes('RGB', fig.canvas.get_width_height(), fig.canvas.tostring_rgb())
-        imgs.append(img)
-        '''
         imgs.append(get_img(all_pos[:,:,i], all_rho[:,i], R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda))
 
     gif_path = os.path.join(os.path.dirname(__file__), f'figures/01_toystar/toystar_{spatial_dim}d.gif')
@@ -102,3 +96,8 @@ for spatial_dim, particle_dim, lmbda in configs:
     fig = plot_frame(all_pos[:,:,-1], all_rho[:,-1], R, polytropic_idx, eq_state_const, h_init, particle_mass, lmbda, colormap='jet')
     plt.savefig(png_path)
     plt.close(fig)
+
+    np_path = os.path.join(os.path.dirname(__file__), f'data/toystar_pos_{spatial_dim}d.npy')
+
+    with open(np_path,'wb') as f:
+        np.save(f, all_pos)
