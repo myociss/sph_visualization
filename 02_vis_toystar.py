@@ -41,8 +41,8 @@ images_color = np.zeros((img_dim, img_dim, all_images.shape[2], 3), dtype=np.uin
 img_g = np.zeros((img_dim, img_dim, all_images.shape[2]), dtype=np.uint8)
 img_b = np.zeros((img_dim, img_dim, all_images.shape[2]), dtype=np.uint8)
 
-img_g[all_images == 1.0] =  150
-# img_g[all_images == 1.0] =  255
+#img_g[all_images == 1.0] =  150
+img_g[all_images == 1.0] =  255
 img_b[all_images == 1.0] =  255
 
 images_color[:,:,:,1] = img_g
