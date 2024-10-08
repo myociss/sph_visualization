@@ -68,18 +68,15 @@ for spatial_dim, particle_dim, lmbda in configs:
         print(i)
 
         update_pos_vel_halfstep[bpg, tpb](d_pos, d_vel, d_dV, dt)
-        calc_density[bpg, tpb](d_pos[:,:,0,:], particle_mass, smoothing_length, d_rho)
 
         get_new_smoothing_lengths(d_pos[:,:,0,:], x, y, particle_mass, 3.0, tpb, bpg, n_iter=15)
         smoothing_length = x[:,:,1]
-        #smoothing_length_y_cpu = y[:,:,1].copy_to_host()
-        #assert np.all(np.abs(smoothing_length_y_cpu) < 0.001 * R)
-
         x_cpu = x.copy_to_host()
         delta_ratio = np.max(np.abs(x_cpu[:,:,2] - x_cpu[:,:,0]) / h_init)
         assert np.all(delta_ratio < 0.02 * h_init)
-        
 
+
+        calc_density[bpg, tpb](d_pos[:,:,0,:], particle_mass, smoothing_length, d_rho)
         calc_dv_toystar[bpg, tpb](d_pos[:,:,0,:], d_vel[:,:,0,:], particle_mass, smoothing_length, eq_state_const, polytropic_idx, lmbda, viscosity, d_rho, d_dV)
 
         update_pos_vel_halfstep[bpg, tpb](d_pos, d_vel, d_dV, dt)
