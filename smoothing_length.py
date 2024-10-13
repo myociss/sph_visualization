@@ -76,7 +76,14 @@ def bisect_update(x, y):
 
 
 def get_new_smoothing_lengths(pos, x, y, particle_mass, kernel_radius, tpb, bpg, n_iter=30):
+    #print(pos.shape)
+    #print(x.shape)
+    #print(y.shape)
     calc_h_guesses[bpg, tpb](pos, kernel_radius, x)
+
+    #print(pos.shape)
+    #print(x.shape)
+    #print(y.shape)
     
     calc_zeta[bpg, tpb](pos, particle_mass, x[:,:,0], y[:,:,0])
     calc_zeta[bpg, tpb](pos, particle_mass, x[:,:,2], y[:,:,2])
