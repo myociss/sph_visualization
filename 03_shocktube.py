@@ -156,7 +156,7 @@ xs = np.linspace(0,0.8,Nx)
 x0 = Nx//2
 analytic = SodShockAnalytic(1.0, 0.0, 1.0, 0.25, 0.0, 0.1795, xs, x0, steps*1e-04, 1.4)
 
-png_path = os.path.join(os.path.dirname(__file__), f'figures/04_shocktube')
+png_path = os.path.join(os.path.dirname(__file__), f'figures/03_shocktube')
 
 for param, numeric, analytic in zip(['density', 'velocity', 'pressure'], [rho, vel, pressure], analytic):
     fig = plt.figure()
