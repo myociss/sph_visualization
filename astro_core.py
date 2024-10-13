@@ -34,26 +34,17 @@ def calc_dv_denergy(pos, vel, particle_mass, smoothing_lengths, adiabatic_idx, d
 @cuda.jit('void(float32[:,:], float32, float32, float32[:,:])')
 def calc_pressure_polytrope(density, eq_state_const, polytropic_idx, pressure):
     i, j = cuda.grid(2)
-
     adiabatic_index = 1+(1/polytropic_idx)
-
     rho = density[i,j]
     p = eq_state_const * (rho**adiabatic_index)
-
     pressure[i,j] = p
 
 @cuda.jit('void(float32[:,:], float32[:,:], float32, float32[:,:])')
 def calc_pressure_from_energy(density, energy, adiabatic_idx, pressure):
     i, j = cuda.grid(2)
-
     rho = density[i,j]
     e = energy[i,j]
-
     p = (adiabatic_idx - 1) * e * rho
-    #print(p)
-    #print(p)
-    #print(pressure[i,j])
-
     pressure[i,j] = p
 
 
@@ -89,7 +80,6 @@ def calc_params_shocktube(pos, vel, particle_mass, smoothing_lengths, adiabatic_
 
             radius = math.sqrt(radius)
             
-
             h_j = smoothing_lengths[i1,j1]
             h = 0.5*(h_i + h_j)
 
@@ -127,7 +117,7 @@ def calc_params_shocktube(pos, vel, particle_mass, smoothing_lengths, adiabatic_
             d_e += particle_mass * (pressure_acc + visc) * vij
 
     for d in range(dim):
-        dV[i,j,d] = -dV[i,j,d] * mask[i,j]#- viscosity * velocity[d]
+        dV[i,j,d] = -dV[i,j,d] * mask[i,j]
     dE[i,j] = 0.5 * d_e * mask[i,j]
 
 
@@ -289,6 +279,52 @@ def calc_density(pos, particle_mass, smoothing_lengths, density):
             rho += particle_mass * w
     
     density[i, j] = rho
+
+@cuda.jit('void(float32[:,:], float32[:,:], float32[:,:], float32)')
+def leapfrog_update(x_current, x_next, dx, dt):
+    # update 1 dimensional quantity (energy)
+    i, j = cuda.grid(2)
+    x_next[i,j] = x_current[i,j] + dt * dx[i,j]
+
+@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32[:,:,:], float32)')
+def leapfrog_update_nd(x_current, x_next, dx, dt):
+    # update 2 or 3 dimensional quantity (position, velocity)
+    i, j = cuda.grid(2)
+    dim = len(x_current[i,j])
+    for d in range(dim):
+        x_next[i,j,d] = x_current[i,j,d] + dt * dx[i,j,d]
+
+@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32[:,:,:])')
+def calc_mean_nd(x0, x1, y):
+    i, j = cuda.grid(2)
+    dim = len(x0[i,j])
+    for d in range(dim):
+        y[i,j,d] = 0.5 * (x0[i,j,d] + x1[i,j,d])
+
+
+def copy_devarray(arr):
+    new_arr = cuda.device_array_like(arr)
+    new_arr[:] = arr
+    return new_arr
+
+def get_mean_velocity(x0, x1, y, tpb, bpg):
+    assert len(x0.shape) == 3# and x1.shape == 3
+    dim = x0.shape[2]
+    for d in range(dim):
+        calc_mean[bpg, tpb](x0[:,:,d], x1[:,:,d], y[:,:,d])
+
+def update_param(x_current, x_next, dx, dt, tpb, bpg):
+    if len(x_current.shape) == 2:
+        # 1D quantity
+        leapfrog_update[bpg, tpb](x_current, x_next, dx, dt)
+    else:
+        # nD quantity
+        assert len(x_current.shape) == 3# and dx.shape == 3
+        dim = x_current.shape[2]
+        for d in range(dim):
+            leapfrog_update[bpg, tpb](x_current[:,:,d], x_next[:,:,d], dx[:,:,d], dt)
+
+
 
 @cuda.jit('void(float32[:,:,:,:], float32[:,:,:,:], float32[:,:,:], float32)')
 def update_pos_vel_halfstep(pos, vel, dV, dt):
