@@ -122,6 +122,10 @@ dt = 1e-04
 tEnd = 0.2
 steps = int(tEnd/dt)
 
+steps = 30
+import time
+start = time.time()
+
 for i in range(steps):
     print(i)
 
@@ -141,6 +145,9 @@ for i in range(steps):
 
     calc_mean_nd[bpg, tpb](vel_i, d_vel, vel_mean)
     leapfrog_update_nd[bpg, tpb](pos_i, d_pos, vel_mean, dt)
+
+print(time.time() - start)
+exit()
 
 pos = np.reshape(d_pos.copy_to_host(), (particle_dim*particle_dim))
 vel = np.reshape(d_vel.copy_to_host(), (particle_dim*particle_dim))

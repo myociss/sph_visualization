@@ -23,7 +23,7 @@ viscosity = 1 # damping
 lmbda_2d = 2*eq_state_const*np.pi**(-1/polytropic_idx) * ( ( (M*(1+polytropic_idx)) / (R**2) )**(1 + 1/polytropic_idx) ) / M
 lmbda_3d = 2*eq_state_const*(1+polytropic_idx)*np.pi**(-3/(2*polytropic_idx)) * (M*gamma(5/2+polytropic_idx)/R**3/gamma(1+polytropic_idx))**(1/polytropic_idx) / R**2
 
-tEnd = 12
+tEnd = 6
 dt = 0.005
 
 configs = [
@@ -44,7 +44,7 @@ for spatial_dim, particle_dim, lmbda in configs:
     smoothing_length = cuda.to_device(smoothing_length.astype('f4'))
 
     #init_pos = (R * 4/3) * np.random.randn(particle_dim, particle_dim, 2, spatial_dim).astype('f4')
-    init_pos = (R * 4/3) * np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4')
+    init_pos = (R * 4/3)*0.3 * np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4')
     d_pos = cuda.to_device(init_pos)
 
     pos_i = cuda.to_device(np.zeros(d_pos.shape, dtype='f4'))
