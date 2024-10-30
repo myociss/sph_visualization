@@ -49,6 +49,8 @@ for spatial_dim, particle_dim, lmbda in configs:
     smoothing_length = np.zeros((particle_dim, particle_dim)) + h_init
     smoothing_length = cuda.to_device(smoothing_length.astype('f4'))
 
+    mask = cuda.to_device(np.ones((particle_dim, particle_dim), dtype='f4'))
+
     init_pos = (R * 4/3) * np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4')
     d_pos = cuda.to_device(init_pos)
 
@@ -83,7 +85,7 @@ for spatial_dim, particle_dim, lmbda in configs:
         leapfrog_update_nd[bpg, tpb](d_pos, d_pos, d_vel, dt*0.5)
         leapfrog_update_nd[bpg, tpb](d_vel, d_vel, d_dV, dt*0.5)
 
-        get_new_smoothing_lengths(d_pos, x, y, particle_mass, 3.0, tpb, bpg, n_iter=15)
+        get_new_smoothing_lengths(d_pos, x, y, particle_mass, 3.0, tpb, bpg, mask, n_iter=15)
         smoothing_length = x[:,:,1]
         x_cpu = x.copy_to_host()
         delta_ratio = np.max(np.abs(x_cpu[:,:,2] - x_cpu[:,:,0]) / h_init)

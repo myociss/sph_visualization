@@ -165,6 +165,7 @@ def test_h_guesses(setup_data, spatial_dim):
     zeta = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
+    mask = cuda.to_device(np.ones((particle_dim, particle_dim), dtype='f4'))
 
     pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
     x_dist, y_dist, z_dist = pairwise_separations( pos_cpu, pos_cpu )
@@ -175,7 +176,7 @@ def test_h_guesses(setup_data, spatial_dim):
     low_pmocz = np.nanmin(r_pmocz, axis=0) * (1 / kernel_radius)
     high_pmocz = np.nanmax(r_pmocz, axis=0) * (1 / kernel_radius)
 
-    calc_h_guesses[bpg, tpb](pos_gpu, kernel_radius, h_guesses)
+    calc_h_guesses[bpg, tpb](pos_gpu, mask, kernel_radius, h_guesses)
     h_guesses_cpu = np.reshape(h_guesses.copy_to_host(), (particle_dim*particle_dim, 3))
     low = h_guesses_cpu[:,0]
     high = h_guesses_cpu[:,2]
@@ -194,13 +195,15 @@ def test_zeta(setup_data, spatial_dim):
     zeta = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
-    calc_h_guesses[bpg, tpb](pos_gpu, kernel_radius, h_guesses)
+    mask = cuda.to_device(np.ones((particle_dim, particle_dim), dtype='f4'))
 
-    calc_zeta[bpg, tpb](pos_gpu, particle_mass, h_guesses[:,:,0], zeta)
+    calc_h_guesses[bpg, tpb](pos_gpu, mask, kernel_radius, h_guesses)
+
+    calc_zeta[bpg, tpb](pos_gpu, mask, particle_mass, h_guesses[:,:,0], zeta)
     zeta_low = zeta.copy_to_host()
     assert np.all(zeta_low > 0.0)
 
-    calc_zeta[bpg, tpb](pos_gpu, particle_mass, h_guesses[:,:,2], zeta)
+    calc_zeta[bpg, tpb](pos_gpu, mask, particle_mass, h_guesses[:,:,2], zeta)
     zeta_high = zeta.copy_to_host()
     assert np.all(zeta_high < 0.0)
 
@@ -210,7 +213,7 @@ def test_zeta(setup_data, spatial_dim):
 
     for i in range(n_samples):
         h_iter = cuda.to_device(np.ascontiguousarray(all_hvals[i,:,:]))
-        calc_zeta[bpg, tpb](pos_gpu, particle_mass, h_iter, zeta)
+        calc_zeta[bpg, tpb](pos_gpu, mask, particle_mass, h_iter, zeta)
         zeta_cpu = zeta.copy_to_host()
         sign_test_vals[:,:,i] = zeta_cpu
 
@@ -224,7 +227,7 @@ def test_zeta(setup_data, spatial_dim):
 
 
 @pytest.mark.parametrize('spatial_dim', [2, 3])
-def test_newton_method(setup_data, spatial_dim):
+def test_bisection_method(setup_data, spatial_dim):
     pos_2d, pos_3d = setup_data
     n_samples = 50
     n_iter = 30
@@ -232,16 +235,16 @@ def test_newton_method(setup_data, spatial_dim):
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
     x = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
     y = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
-    calc_h_guesses[bpg, tpb](pos_gpu, kernel_radius, x)
+
+    mask = cuda.to_device(np.ones((particle_dim, particle_dim), dtype='f4'))
+
+    calc_h_guesses[bpg, tpb](pos_gpu, mask, kernel_radius, x)
 
     all_hvals = np.linspace(x[:,:,0], x[:,:,2], n_samples).astype('f4')
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
     
-    get_new_smoothing_lengths(pos_gpu, x, y, particle_mass, kernel_radius, tpb, bpg, n_iter=30)
-
-    #midpt_y_cpu = y.copy_to_host()[:,:,1]
-    #midpt_x_cpu = x.copy_to_host()[:,:,1]
+    get_new_smoothing_lengths(pos_gpu, x, y, particle_mass, kernel_radius, tpb, bpg, mask, n_iter=30)
 
     x_cpu = x.copy_to_host()
 
@@ -255,7 +258,7 @@ def test_newton_method(setup_data, spatial_dim):
 
     for i in range(n_samples):
         h_iter = cuda.to_device(np.ascontiguousarray(all_hvals[i,:,:]))
-        calc_zeta[bpg, tpb](pos_gpu, particle_mass, h_iter, zeta)
+        calc_zeta[bpg, tpb](pos_gpu, mask, particle_mass, h_iter, zeta)
         zeta_cpu = zeta.copy_to_host()
         sign_test_vals[:,:,i] = zeta_cpu
 

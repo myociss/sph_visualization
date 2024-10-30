@@ -126,6 +126,32 @@ def gradw_quintic(r, h, dim):
 
     return tmp
 
+def grav_grad_quintic(r, h):
+    # from phantom sph
+    h1 = 1. / h
+    q = r * h1
+    
+    q2 = q*q
+    if q < 1.:
+        q4 = q2*q2
+        q6 = q4*q2
+        fsoft = q*(-35.*q4*q + 120.*q4 - 336.*q2 + 616.)/840
+    elif q < 2.:
+        q4 = q2*q2
+        q6 = q4*q2
+        q8 = q6*q2
+        fsoft = (35.*q8 - 360.*q6*q + 1400.*q6 - 2352.*q4*q + 1050.*q4 + 952.*q2*q + 5.)/(1680.*q2)
+    elif q < 2.:
+        q4 = q2*q2
+        q6 = q4*q2
+        q8 = q6*q2
+        fsoft = (35.*q8 - 360.*q6*q + 1400.*q6 - 2352.*q4*q + 1050.*q4 + 952.*q2*q + 5.)/(1680.*q2)
+    else:
+        fsoft = 1./q2
+
+    return fsoft#*h1*h1
+
+
 #w_gauss_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(w_gauss)
 #gradw_gauss_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(gradw_gauss)
 #dwdq_gauss_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(dwdq_gauss)
@@ -133,6 +159,7 @@ def gradw_quintic(r, h, dim):
 w_quintic_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(w_quintic)
 #gradw_quintic_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(gradw_quintic)
 dwdq_quintic_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(dwdq_quintic)
+grav_grad_quintic_gpu = cuda.jit("float32(float32, float32)", device=True)(grav_grad_quintic)
 
 
 if __name__ == '__main__':

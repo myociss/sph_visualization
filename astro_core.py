@@ -1,35 +1,9 @@
 import math
+from scipy.constants import gravitational_constant
 from numba import cuda
-from kernels import w_quintic_gpu, dwdq_quintic_gpu
+from kernels import w_quintic_gpu, dwdq_quintic_gpu, grav_grad_quintic_gpu
 
-
-'''
-@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32, float32[:,:], float32, float32[:,:], float32[:,:], float32[:,:,:], float32[:,:])')
-def calc_dv_denergy(pos, vel, particle_mass, smoothing_lengths, adiabatic_idx, density, energy, dV, dE):
-
-    i, j = cuda.grid(2)
-
-    alpha_visc = 1
-    beta_visc = 2
-    epsilon_visc = 0.01
-
-    position = pos[i,j]#,0]
-    velocity = vel[i,j]
-    dim = len(position)
-
-
-    e = energy[i,j]
-    dim = len(position)
-
-    rho = density[i,j]
-    pressure = (adiabatic_idx - 1) * e * rho
-    c = math.sqrt(adiabatic_idx * pressure / rho)
-
-    h_i = smoothing_lengths[i,j]
-
-    for d in range(dim):
-        dV[i,j,d] = 0
-'''
+G = gravitational_constant#*1.3
 
 @cuda.jit('void(float32[:,:], float32, float32, float32[:,:])')
 def calc_pressure_polytrope(density, eq_state_const, polytropic_idx, pressure):
@@ -122,8 +96,107 @@ def calc_params_shocktube(pos, vel, particle_mass, smoothing_lengths, adiabatic_
 
 
 
+
+@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32, float32, float32[:,:], float32, float32, float32[:,:], float32[:,:,:], float32[:,:])')
+def calc_dv_polytrope(pos, vel, gravity, particle_mass, smoothing_lengths, eq_state_const, polytropic_idx, density, dV, mask):
+    i, j = cuda.grid(2)
+
+    if mask[i,j] == 0:
+        return
+
+    alpha_visc = 1
+    beta_visc = 2
+    epsilon_visc = 0.01
+
+    position = pos[i,j]#,0]
+    velocity = vel[i,j]
+    dim = len(position)
+
+    adiabatic_index = 1+(1/polytropic_idx)
+
+    rho = density[i,j]
+    pressure = eq_state_const * (rho**adiabatic_index)
+    #energy = pressure / ((adiabatic_index - 1) * rho)
+
+    # eq_state_const * (rho**adiabatic_index) / ((adiabatic_index - 1) * rho)
+    #c = math.sqrt(energy)
+    c = math.sqrt(adiabatic_index * pressure / rho)
+
+    h_i = smoothing_lengths[i,j]
+
+    for d in range(dim):
+        dV[i,j,d] = 0
+
+    for i1 in range(pos.shape[0]):
+        for j1 in range(pos.shape[1]):
+            if mask[i1,j1] == 0:
+                continue
+
+            radius = 0.0
+            for d in range(dim):
+                radius += (position[d] - pos[i1, j1, d])**2
+
+            radius = math.sqrt(radius)
+
+            #if radius > 3.0:
+            #    continue
+            
+
+            h_j = smoothing_lengths[i1,j1]
+            h = 0.5*(h_i + h_j)
+
+            if radius > 1e-12:
+                grad_w = dwdq_quintic_gpu(radius, h, dim) * (1./h) / radius
+                grav_grad = grav_grad_quintic_gpu(radius, h) * (1./(h*h)) / radius
+            else:
+                grad_w = 0.0
+                grav_grad = 0.0
+
+            other_rho = density[i1, j1]
+            other_pressure = eq_state_const * (other_rho**adiabatic_index)
+            #other_energy = other_pressure / ((adiabatic_index - 1) * other_rho)
+            #other_c = math.sqrt(other_energy)
+            other_c = math.sqrt(adiabatic_index * other_pressure / other_rho)
+            c_mean = 0.5 * (c + other_c)
+
+            v_r_dot = 0.0
+
+            for d in range(dim):
+                v_r_dot += (position[d] - pos[i1, j1, d]) * (velocity[d] - vel[i1, j1, d])
+
+            mu = h * v_r_dot / (radius*radius + epsilon_visc*h*h)
+            rho_mean = 0.5 * (rho + other_rho)
+
+            if v_r_dot < 0:
+                visc = (-alpha_visc*c_mean*mu + beta_visc*mu*mu) / rho_mean
+            else:
+                visc = 0.0
+
+            #print(visc)
+
+            #grav_grad = grav_grad_quintic_gpu(radius, h) * (1./(h*h)) / radius
+
+
+
+            #d_r = 0.0
+            #d_v = 0.0
+            #for d in range(dim):
+            #    d_r += 
+
+            pressure_acc =  (pressure/(rho*rho)) + (other_pressure/(other_rho*other_rho))
+
+            for d in range(dim):
+                #grav_comp = 0.5*G*particle_mass*grav_grad * (position[d] - pos[i1, j1, d]) *25000 * 0.9 #* 5
+                #grav_comp = 0.5*G*particle_mass*grav_grad * (position[d] - pos[i1, j1, d])
+                grav_comp = gravity*particle_mass*grav_grad*(position[d] - pos[i1, j1, d])
+                dV[i,j,d] += particle_mass * (pressure_acc + visc) * grad_w * (position[d] - pos[i1, j1, d]) + grav_comp
+
+    for d in range(dim):
+        dV[i,j,d] = -dV[i,j,d]# - lmbda * position[d]
+
+
 @cuda.jit('void(float32[:,:,:], float32[:,:,:], float32, float32[:,:], float32, float32, float32, float32[:,:], float32[:,:,:])')
-def calc_dv_polytrope(pos, vel, particle_mass, smoothing_lengths, eq_state_const, polytropic_idx, lmbda, density, dV):
+def calc_dv_polytrope_save(pos, vel, particle_mass, smoothing_lengths, eq_state_const, polytropic_idx, lmbda, density, dV):
     i, j = cuda.grid(2)
 
     alpha_visc = 1
@@ -157,6 +230,9 @@ def calc_dv_polytrope(pos, vel, particle_mass, smoothing_lengths, eq_state_const
                 radius += (position[d] - pos[i1, j1, d])**2
 
             radius = math.sqrt(radius)
+
+            #if radius > 3.0:
+            #    continue
             
 
             h_j = smoothing_lengths[i1,j1]
@@ -164,8 +240,10 @@ def calc_dv_polytrope(pos, vel, particle_mass, smoothing_lengths, eq_state_const
 
             if radius > 1e-12:
                 grad_w = dwdq_quintic_gpu(radius, h, dim) * (1./h) / radius
+                grav_grad = grav_grad_quintic_gpu(radius, h) * (1./(h*h)) / radius
             else:
                 grad_w = 0.0
+                grav_grad = 0.0
 
             other_rho = density[i1, j1]
             other_pressure = eq_state_const * (other_rho**adiabatic_index)
@@ -189,6 +267,8 @@ def calc_dv_polytrope(pos, vel, particle_mass, smoothing_lengths, eq_state_const
 
             #print(visc)
 
+            #grav_grad = grav_grad_quintic_gpu(radius, h) * (1./(h*h)) / radius
+
 
 
             #d_r = 0.0
@@ -199,10 +279,13 @@ def calc_dv_polytrope(pos, vel, particle_mass, smoothing_lengths, eq_state_const
             pressure_acc =  (pressure/(rho*rho)) + (other_pressure/(other_rho*other_rho))
 
             for d in range(dim):
-                dV[i,j,d] += particle_mass * (pressure_acc + visc) * grad_w * (position[d] - pos[i1, j1, d])
+                #grav_comp = 0.5*G*particle_mass*grav_grad * (position[d] - pos[i1, j1, d]) *25000 * 0.9 #* 5
+                grav_comp = 0.5*G*particle_mass*grav_grad * (position[d] - pos[i1, j1, d])
+                dV[i,j,d] += particle_mass * (pressure_acc + visc) * grad_w * (position[d] - pos[i1, j1, d]) + grav_comp
 
     for d in range(dim):
-        dV[i,j,d] = -dV[i,j,d] - lmbda * position[d] #- viscosity * velocity[d]
+        dV[i,j,d] = -dV[i,j,d]# - lmbda * position[d]
+
 
 
 @cuda.jit('void(float32[:,:,:], float32[:,:,:], float32, float32[:,:], float32, float32, float32, float32, float32[:,:], float32[:,:,:])')
@@ -273,6 +356,40 @@ def calc_density(pos, particle_mass, smoothing_lengths, density):
                 radius += (position[d] - pos[i1, j1, d])**2
 
             radius = math.sqrt(radius)
+
+            h_j = smoothing_lengths[i1,j1]
+            h = 0.5*(h_i + h_j)
+            w = w_quintic_gpu(radius, h, dim)
+            rho += particle_mass * w
+    
+    density[i, j] = rho
+
+@cuda.jit('void(float32[:,:,:], float32[:,:], float32, float32[:,:], float32[:,:])')
+def calc_density_masked(pos, mask, particle_mass, smoothing_lengths, density):
+
+    i, j = cuda.grid(2)
+    if mask[i,j] == 0:
+        return
+
+    position = pos[i,j]#,0]
+    dim = len(position)
+
+    h_i = smoothing_lengths[i,j]
+
+    rho = 0.0
+
+    for i1 in range(pos.shape[0]):
+        for j1 in range(pos.shape[1]):
+            if mask[i1,j1] == 0:
+                continue
+
+            radius = 0.0
+            for d in range(dim):
+                #radius += (position[d] - pos[i1, j1, 0, d])**2
+                radius += (position[d] - pos[i1, j1, d])**2
+
+            radius = math.sqrt(radius)
+
             h_j = smoothing_lengths[i1,j1]
             h = 0.5*(h_i + h_j)
             w = w_quintic_gpu(radius, h, dim)
