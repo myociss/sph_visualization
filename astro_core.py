@@ -195,9 +195,12 @@ def calc_dv_polytrope(pos, vel, gravity, particle_mass, smoothing_lengths, eq_st
         dV[i,j,d] = -dV[i,j,d]# - lmbda * position[d]
 
 
-@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32, float32[:,:], float32, float32, float32, float32[:,:], float32[:,:,:])')
-def calc_dv_polytrope_save(pos, vel, particle_mass, smoothing_lengths, eq_state_const, polytropic_idx, lmbda, density, dV):
+@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32[:,:], float32[:,:], float32, float32, float32, float32[:,:], float32[:,:,:], float32[:,:])')
+def calc_dv_polytrope_save(pos, vel, particle_mass, smoothing_lengths, eq_state_const, polytropic_idx, lmbda, density, dV, mask):
     i, j = cuda.grid(2)
+
+    if mask[i,j] == 0:
+        return
 
     alpha_visc = 1
     beta_visc = 2
@@ -225,15 +228,18 @@ def calc_dv_polytrope_save(pos, vel, particle_mass, smoothing_lengths, eq_state_
     for i1 in range(pos.shape[0]):
         for j1 in range(pos.shape[1]):
 
+            if mask[i1,j1] == 0:
+                continue
+
             radius = 0.0
+
             for d in range(dim):
                 radius += (position[d] - pos[i1, j1, d])**2
 
-            radius = math.sqrt(radius)
+            softened_radius = radius + 0.02**2
+            softened_radius = math.sqrt(softened_radius)
 
-            #if radius > 3.0:
-            #    continue
-            
+            radius = math.sqrt(radius)
 
             h_j = smoothing_lengths[i1,j1]
             h = 0.5*(h_i + h_j)
@@ -244,6 +250,13 @@ def calc_dv_polytrope_save(pos, vel, particle_mass, smoothing_lengths, eq_state_
             else:
                 grad_w = 0.0
                 grav_grad = 0.0
+
+            #for d in range(dim):
+            #    grav_comp = 6.674e-8*particle_mass*grav_grad * (position[d] - pos[i1, j1, d]) #this works for jupiter 3d
+            #    dV[i,j,d] += grav_comp
+
+            #if radius > 3:
+            #    continue
 
             other_rho = density[i1, j1]
             other_pressure = eq_state_const * (other_rho**adiabatic_index)
@@ -279,16 +292,16 @@ def calc_dv_polytrope_save(pos, vel, particle_mass, smoothing_lengths, eq_state_
             pressure_acc =  (pressure/(rho*rho)) + (other_pressure/(other_rho*other_rho))
 
             for d in range(dim):
-                #grav_comp = 0.5*G*particle_mass*grav_grad * (position[d] - pos[i1, j1, d]) *25000 * 0.9 #* 5
-                grav_comp = 0.5*G*particle_mass*grav_grad * (position[d] - pos[i1, j1, d])
-                dV[i,j,d] += particle_mass * (pressure_acc + visc) * grad_w * (position[d] - pos[i1, j1, d]) + grav_comp
+                grav_comp = 6.674e-8*particle_mass[i1,j1]*grav_grad * (position[d] - pos[i1, j1, d]) #this works for jupiter 3d
+                #grav_comp = 6.674e-8*particle_mass* (position[d] - pos[i1, j1, d]) / (softened_radius**3) # kind of works for 3D but not well
+                dV[i,j,d] += particle_mass[i1,j1] * (pressure_acc + visc) * grad_w * (position[d] - pos[i1, j1, d]) + grav_comp
 
     for d in range(dim):
         dV[i,j,d] = -dV[i,j,d]# - lmbda * position[d]
 
 
 
-@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32, float32[:,:], float32, float32, float32, float32, float32[:,:], float32[:,:,:])')
+@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32[:,:], float32[:,:], float32, float32, float32, float32, float32[:,:], float32[:,:,:])')
 def calc_dv_toystar(pos, vel, particle_mass, smoothing_lengths, eq_state_const, polytropic_idx, lmbda, viscosity, density, dV):
     i, j = cuda.grid(2)
 
@@ -329,13 +342,13 @@ def calc_dv_toystar(pos, vel, particle_mass, smoothing_lengths, eq_state_const, 
             pressure_acc =  (pressure/(rho*rho)) + (other_pressure/(other_rho*other_rho))
 
             for d in range(dim):
-                dV[i,j,d] += particle_mass * pressure_acc * grad_w * (position[d] - pos[i1, j1, d])
+                dV[i,j,d] += particle_mass[i1,j1] * pressure_acc * grad_w * (position[d] - pos[i1, j1, d])
 
     for d in range(dim):
         dV[i,j,d] = -dV[i,j,d] - lmbda * position[d] - viscosity * velocity[d]
 
 
-@cuda.jit('void(float32[:,:,:], float32, float32[:,:], float32[:,:])')
+@cuda.jit('void(float32[:,:,:], float32[:,:], float32[:,:], float32[:,:])')
 def calc_density(pos, particle_mass, smoothing_lengths, density):
 
     i, j = cuda.grid(2)
@@ -360,11 +373,11 @@ def calc_density(pos, particle_mass, smoothing_lengths, density):
             h_j = smoothing_lengths[i1,j1]
             h = 0.5*(h_i + h_j)
             w = w_quintic_gpu(radius, h, dim)
-            rho += particle_mass * w
+            rho += particle_mass[i1,j1] * w
     
     density[i, j] = rho
 
-@cuda.jit('void(float32[:,:,:], float32[:,:], float32, float32[:,:], float32[:,:])')
+@cuda.jit('void(float32[:,:,:], float32[:,:], float32[:,:], float32[:,:], float32[:,:])')
 def calc_density_masked(pos, mask, particle_mass, smoothing_lengths, density):
 
     i, j = cuda.grid(2)
@@ -393,7 +406,7 @@ def calc_density_masked(pos, mask, particle_mass, smoothing_lengths, density):
             h_j = smoothing_lengths[i1,j1]
             h = 0.5*(h_i + h_j)
             w = w_quintic_gpu(radius, h, dim)
-            rho += particle_mass * w
+            rho += particle_mass[i1,j1] * w
     
     density[i, j] = rho
 

@@ -57,12 +57,15 @@ def test_rho(setup_data, spatial_dim):
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
 
     pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
+
+    particle_masses = np.zeros((particle_dim, particle_dim)) + particle_mass
+    particle_masses = cuda.to_device(particle_masses.astype('f4'))
     rho_pmocz = density(pos_cpu, h_init, particle_mass, spatial_dim)
 
     smoothing_lengths = np.zeros((particle_dim, particle_dim)) + h_init
     smoothing_lengths = cuda.to_device(smoothing_lengths.astype('f4'))
     rho = cuda.to_device(np.zeros((particle_dim, particle_dim)).astype('f4'))
-    calc_density[bpg, tpb](pos_gpu, particle_mass, smoothing_lengths, rho)
+    calc_density[bpg, tpb](pos_gpu, particle_masses, smoothing_lengths, rho)
 
     rho_cpu = np.reshape(rho.copy_to_host(), (particle_dim*particle_dim,1))
 
@@ -89,6 +92,9 @@ def test_dv(setup_data, spatial_dim):
 
     pos_cpu = np.reshape(pos_gpu.copy_to_host(), (particle_dim*particle_dim, spatial_dim)).astype('f4')
 
+    particle_masses = np.zeros((particle_dim, particle_dim)) + particle_mass
+    particle_masses = cuda.to_device(particle_masses.astype('f4'))
+
     acc_pmocz = dv(pos_cpu, np.reshape(velocity, (particle_dim*particle_dim,spatial_dim)), h_init, eq_state_const, polytropic_idx, lmbda, viscosity, particle_mass, spatial_dim)
 
     acc = cuda.to_device( np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4') )# make sure setting dV[i,j,d] = 0 works
@@ -98,9 +104,9 @@ def test_dv(setup_data, spatial_dim):
     smoothing_lengths = cuda.to_device(smoothing_lengths.astype('f4'))
 
     rho = cuda.to_device(np.zeros((particle_dim, particle_dim)).astype('f4'))
-    calc_density[bpg, tpb](pos_gpu, particle_mass, smoothing_lengths, rho)
+    calc_density[bpg, tpb](pos_gpu, particle_masses, smoothing_lengths, rho)
 
-    calc_dv_toystar[bpg, tpb](pos_gpu, vel, particle_mass, smoothing_lengths, eq_state_const, polytropic_idx, lmbda, viscosity, rho, acc)
+    calc_dv_toystar[bpg, tpb](pos_gpu, vel, particle_masses, smoothing_lengths, eq_state_const, polytropic_idx, lmbda, viscosity, rho, acc)
     acc_cpu = np.reshape(acc.copy_to_host(), acc_pmocz.shape)
 
     assert np.all(np.abs(acc_pmocz - acc_cpu) < 0.2)
@@ -197,13 +203,16 @@ def test_zeta(setup_data, spatial_dim):
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
     mask = cuda.to_device(np.ones((particle_dim, particle_dim), dtype='f4'))
 
+    particle_masses = np.zeros((particle_dim, particle_dim)) + particle_mass
+    particle_masses = cuda.to_device(particle_masses.astype('f4'))
+
     calc_h_guesses[bpg, tpb](pos_gpu, mask, kernel_radius, h_guesses)
 
-    calc_zeta[bpg, tpb](pos_gpu, mask, particle_mass, h_guesses[:,:,0], zeta)
+    calc_zeta[bpg, tpb](pos_gpu, mask, particle_masses, h_guesses[:,:,0], zeta)
     zeta_low = zeta.copy_to_host()
     assert np.all(zeta_low > 0.0)
 
-    calc_zeta[bpg, tpb](pos_gpu, mask, particle_mass, h_guesses[:,:,2], zeta)
+    calc_zeta[bpg, tpb](pos_gpu, mask, particle_masses, h_guesses[:,:,2], zeta)
     zeta_high = zeta.copy_to_host()
     assert np.all(zeta_high < 0.0)
 
@@ -213,7 +222,7 @@ def test_zeta(setup_data, spatial_dim):
 
     for i in range(n_samples):
         h_iter = cuda.to_device(np.ascontiguousarray(all_hvals[i,:,:]))
-        calc_zeta[bpg, tpb](pos_gpu, mask, particle_mass, h_iter, zeta)
+        calc_zeta[bpg, tpb](pos_gpu, mask, particle_masses, h_iter, zeta)
         zeta_cpu = zeta.copy_to_host()
         sign_test_vals[:,:,i] = zeta_cpu
 
@@ -237,6 +246,8 @@ def test_bisection_method(setup_data, spatial_dim):
     y = cuda.to_device(np.zeros((particle_dim, particle_dim, 3), dtype='f4'))
 
     mask = cuda.to_device(np.ones((particle_dim, particle_dim), dtype='f4'))
+    particle_masses = np.zeros((particle_dim, particle_dim)) + particle_mass
+    particle_masses = cuda.to_device(particle_masses.astype('f4'))
 
     calc_h_guesses[bpg, tpb](pos_gpu, mask, kernel_radius, x)
 
@@ -244,7 +255,7 @@ def test_bisection_method(setup_data, spatial_dim):
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
     
-    get_new_smoothing_lengths(pos_gpu, x, y, particle_mass, kernel_radius, tpb, bpg, mask, n_iter=30)
+    get_new_smoothing_lengths(pos_gpu, x, y, particle_masses, kernel_radius, tpb, bpg, mask, n_iter=30)
 
     x_cpu = x.copy_to_host()
 

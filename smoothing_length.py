@@ -7,7 +7,7 @@ eta_const = 1.0 # from "Phantom: A smoothed particle hydrodynamics and magnetohy
 # (https://arxiv.org/pdf/1702.03930) table 1
 
 
-@cuda.jit('void(float32[:,:,:], float32[:,:], float32, float32[:,:], float32[:,:])')
+@cuda.jit('void(float32[:,:,:], float32[:,:], float32[:,:], float32[:,:], float32[:,:])')
 def calc_zeta(pos, mask, particle_mass, smoothing_lengths, zeta):
     i, j = cuda.grid(2)
 
@@ -31,9 +31,9 @@ def calc_zeta(pos, mask, particle_mass, smoothing_lengths, zeta):
 
             radius = math.sqrt(radius)
             w = w_quintic_gpu(radius, h, dim)
-            rho += particle_mass * w
+            rho += particle_mass[i1,j1] * w
 
-    zeta[i,j] = particle_mass * ( (eta_const / h)**dim ) - rho
+    zeta[i,j] = particle_mass[i,j] * ( (eta_const / h)**dim ) - rho
 
 
 @cuda.jit('void(float32[:,:,:], float32[:,:], float32, float32[:,:,:])')

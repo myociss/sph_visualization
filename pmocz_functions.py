@@ -16,6 +16,26 @@ def get_img(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbd
     plt.close(fig)
     return img
 
+def get_img_alt(pos, dens, R, colormap='autumn'):
+    fig = plt.figure(figsize=(4,5), dpi=80)
+    ax1 = fig.add_subplot(111)
+    cmap = plt.cm.autumn if colormap == 'autumn' else plt.cm.jet
+    cval = np.minimum(dens-2.5, 2.5).flatten()
+    plt.scatter(pos[:,0],pos[:,1], c=cval, cmap=cmap, s=10, alpha=0.5)
+    ax1.set(xlim=(-1.4 * (R * 4/3), 1.4 * (R * 4/3)), ylim=(-1.2 * (R * 4/3), 1.2 * (R * 4/3)))
+    ax1.set_aspect('equal', 'box')
+    ax1.set_xticks([-(R * 4/3),0,(R * 4/3)])
+    ax1.set_yticks([-(R * 4/3),0,(R * 4/3)])
+    ax1.set_facecolor('black')
+    ax1.set_facecolor((.1,.1,.1))
+
+    fig.canvas.draw()
+    img = Image.frombytes('RGB', fig.canvas.get_width_height(), fig.canvas.tostring_rgb())
+    #imgs.append(img)
+    plt.close(fig)
+
+    return img
+
 
 def plot_frame(pos, dens, R, polytropic_idx, eq_state_const, h, particle_mass, lmbda, colormap='autumn'):
     rr = np.zeros((100,pos.shape[1]))

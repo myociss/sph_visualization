@@ -30,8 +30,8 @@ particle_dim_2d = 48
 ratio_2d = 1/3
 gravity_2d = 7.5085875e-07
 tEnd_2d = 4.0
-particle_mass_2d = mass_2d * particle_dim_2d * particle_dim_2d * (1 - split_from_ratio(ratio_2d))
 mask_2d_large, mask_2d_small = get_masks(particle_dim_2d, ratio_2d)
+particle_mass_2d = mass_2d / np.sum(mask_2d_large)
 
 print(np.sum(mask_2d_large))
 print(np.sum(mask_2d_small))
@@ -41,15 +41,15 @@ mass_3d = 0.6*solar_mass
 particle_dim_3d = 64
 ratio_3d = 1/3
 gravity_3d = 3.33715e-11
-tEnd_3d = 0.00145#5#100.0
-particle_mass_3d = mass_2d * particle_dim_3d * particle_dim_3d * (1 - split_from_ratio(ratio_3d))
+tEnd_3d = 20.0#0.00145#5#100.0
 mask_3d_large, mask_3d_small = get_masks(particle_dim_3d, ratio_3d)
+particle_mass_3d = mass_3d / np.sum(mask_3d_large)
 
 print(np.sum(mask_3d_large))
 print(np.sum(mask_3d_small))
 
 R = 7000000
-eq_state_const = 0.1 * (R * 4/3)
+base_k = 0.1 * (R * 4/3) #/ 3
 polytropic_idx = 3/2
 
 init_r_2d = (R * 4/3)
@@ -58,14 +58,19 @@ init_r_3d = (R * 4/3) * 0.3
 
 
 configs = [
-    #(2, particle_mass_2d, gravity_2d, tEnd_2d, mask_2d_large, init_r_2d, 'large'),
-    #(2, particle_mass_2d, gravity_2d, tEnd_2d, mask_2d_small, init_r_2d * ratio_2d, 'small'),
-    (3, particle_mass_3d, gravity_3d, tEnd_3d, mask_3d_large, init_r_3d, 'large'),
-    (3, particle_mass_3d, gravity_3d, tEnd_3d, mask_3d_small, init_r_3d * ratio_3d, 'small'),
+    #(2, particle_mass_2d, gravity_2d, 1.0, mask_2d_large, init_r_2d, base_k, 'large'),
+    (2, particle_mass_2d, gravity_2d, tEnd_2d, mask_2d_small, init_r_2d * ratio_2d, base_k * ratio_2d, 'small'),
+    #(3, particle_mass_3d, gravity_3d, 40.0, mask_3d_large, init_r_3d, base_k, 'large'),
+    #(3, particle_mass_3d, gravity_3d, 40.0, mask_3d_small, init_r_3d*ratio_3d, base_k * ratio_3d, 'small'),
 ]
 
 
-for spatial_dim, particle_mass, gravity, tEnd, mask_cpu, init_r, size in configs:
+vals_3d = []
+
+for spatial_dim, particle_mass, gravity, tEnd, mask_cpu, init_r, eq_state_const, size in configs:
+    print(particle_mass)
+    #exit()
+
     particle_dim = mask_cpu.shape[0]
     threads = 16
     tpb = (threads, threads)
@@ -99,6 +104,11 @@ for spatial_dim, particle_mass, gravity, tEnd, mask_cpu, init_r, size in configs
 
     dt = 0.0001
 
+    cpu_indexes = np.argwhere(mask_cpu.reshape((particle_dim*particle_dim,)) > 0)
+
+    t_vals = []
+    r_vals = []
+
     while t < tEnd:
         timesteps.append(dt)
 
@@ -114,7 +124,7 @@ for spatial_dim, particle_mass, gravity, tEnd, mask_cpu, init_r, size in configs
         #delta_ratio = np.max(np.abs(x_cpu[:,:,2] - x_cpu[:,:,0]) / h_init)
 
         smoothing_length_cpu = smoothing_length.copy_to_host().reshape((particle_dim*particle_dim,))
-        smoothing_length_cpu = np.squeeze(smoothing_length_cpu[np.argwhere(mask_cpu.reshape((particle_dim*particle_dim,)) > 0)])
+        smoothing_length_cpu = np.squeeze(smoothing_length_cpu[cpu_indexes])
 
         calc_density_masked[bpg, tpb](d_pos, mask, particle_mass, smoothing_length, d_rho)
         calc_dv_polytrope[bpg, tpb](d_pos, d_vel, gravity, particle_mass, smoothing_length, eq_state_const, polytropic_idx, d_rho, d_dV, mask)
@@ -149,14 +159,32 @@ for spatial_dim, particle_mass, gravity, tEnd, mask_cpu, init_r, size in configs
         t += dt
 
         step_dv = d_dV.copy_to_host().reshape((particle_dim*particle_dim,spatial_dim))
-        step_dv = np.squeeze(step_dv[np.argwhere(mask_cpu.reshape((particle_dim*particle_dim,)) > 0)])
+        step_dv = np.squeeze(step_dv[cpu_indexes])
         step_dv = np.linalg.norm(step_dv, axis=-1)
+        
+        
         #print(step_dv.shape)
         #exit()
+        
+        dists = np.linalg.norm(pos_cpu, axis=-1)
+        r_max = np.max(dists)
+
+        t_vals.append(t)
+        r_vals.append(r_max)
 
         dt = np.min( 0.3 * np.sqrt(smoothing_length_cpu / step_dv) )
 
+        #print(dists.shape)
+        #exit()
+
+        
+
         print(t)
+
+    plt.plot(t_vals, r_vals)
+    plt.show()
+
+    vals_3d.append((t_vals, r_vals))
 
     fig = plt.figure()
     ax1 = fig.add_subplot(111)
@@ -175,6 +203,12 @@ for spatial_dim, particle_mass, gravity, tEnd, mask_cpu, init_r, size in configs
 
     plt.show()
 
+
+fig = plt.figure()
+ax1 = fig.add_subplot(111)
+ax1.plot(vals_3d[0][0], vals_3d[0][1])
+ax1.plot(vals_3d[1][0], vals_3d[1][1])
+plt.show()
 
 
 exit()
