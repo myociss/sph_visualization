@@ -1,3 +1,4 @@
 *.txt
 __pycache__/
 .pytest_cache/
+*all_frames.npy

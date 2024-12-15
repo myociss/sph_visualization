@@ -67,7 +67,7 @@ configs = [
     #(2, 48, lmbda_2d, 40)
     #(2, 32, lmbda_2d, 50, 0.0001),
     
-    (3, 80, lmbda_2d, 50, 0.0001),
+    (3, 128, lmbda_2d, 50, 0.0001),
     #(2, 32, lmbda_2d, 50, 0.0001)
 ]
 
@@ -94,13 +94,19 @@ for spatial_dim, particle_dim, lmbda, downsample, dt in configs:
 
     #mask = cuda.to_device(np.ones((particle_dim,particle_dim), dtype='f4'))
     mask_cpu = np.ones((particle_dim,particle_dim), dtype='f4')
-    mask_cpu[int(3 * particle_dim / 4):] = 0.0
-    #mask_cpu[0,0] = 0.0
+    #mask_cpu[int(3 * particle_dim / 4):] = 0.0
+    mask_cpu[0,0] = 0.0
     mask = cuda.to_device(mask_cpu)
     cpu_indexes = np.argwhere(mask_cpu.reshape((particle_dim*particle_dim,)) > 0)
 
     #init_pos = (R * 4/3)* np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4') # for 2d
+    
+    
     init_pos = (R * 4/3)*0.5 * np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4') # for 3d
+    with open('data/points_128_start.npy','rb') as f:
+        pos = np.load(f)
+        #init_pos[:int(3 * particle_dim / 4)] = pos.astype('f4')
+        init_p = pos.astype('f4')
     
     #init_pos = (R * 4/3)  np.random.randn(particle_dim, particle_dim, spatial_dim).astype('f4')
     d_pos = cuda.to_device(init_pos)
@@ -124,12 +130,12 @@ for spatial_dim, particle_dim, lmbda, downsample, dt in configs:
     #exit()
     #steps = int(tEnd/dt)
 
-    steps = 5001
+    steps = 401
 
     particle_masses = np.zeros((particle_dim, particle_dim)) + particle_mass
     particle_masses = cuda.to_device(particle_masses.astype('f4'))
 
-    np_path = os.path.join(os.path.dirname(__file__), f'data/jupiter_relaxed_{spatial_dim}d_mass_80.npy')
+    np_path = os.path.join(os.path.dirname(__file__), f'data/jupiter_relaxed_{spatial_dim}d_mass_128_full.npy')
     with open(np_path,'wb') as f:
         np.save(f, particle_masses)
 
@@ -223,11 +229,11 @@ for spatial_dim, particle_dim, lmbda, downsample, dt in configs:
         t_vals.append(t)
 
         if i==steps-1:
-            np_path = os.path.join(os.path.dirname(__file__), f'data/jupiter_relaxed_{spatial_dim}d_pos_80.npy')
+            np_path = os.path.join(os.path.dirname(__file__), f'data/jupiter_relaxed_{spatial_dim}d_pos_128_full.npy')
             with open(np_path,'wb') as f:
                 np.save(f, d_pos.copy_to_host())
 
-            np_path = os.path.join(os.path.dirname(__file__), f'data/jupiter_relaxed_{spatial_dim}d_energy_80.npy')
+            np_path = os.path.join(os.path.dirname(__file__), f'data/jupiter_relaxed_{spatial_dim}d_energy_128_full.npy')
             with open(np_path,'wb') as f:
                 adiabatic_index = 1+(1/polytropic_idx)
                 pressure_final = eq_state_const * (d_rho.copy_to_host()**adiabatic_index)

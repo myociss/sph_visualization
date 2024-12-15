@@ -22,12 +22,80 @@ def calc_pressure_from_energy(density, energy, adiabatic_idx, pressure):
     pressure[i,j] = p
 
 
-@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32, float32[:,:], float32, float32[:,:], float32[:,:], float32[:,:,:], float32[:,:], float32[:,:])')
-def calc_params_shocktube(pos, vel, particle_mass, smoothing_lengths, adiabatic_idx, density, pressure, dV, dE, mask):
+
+@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32[:,:], float32[:,:], float32[:,:], float32[:,:], float32, float32[:,:], float32[:,:])')
+def calc_alpha_deriv(pos, vel, particle_mass, smoothing_lengths, density, pressure, adiabatic_idx, alpha, alpha_deriv):
     i, j = cuda.grid(2)
 
-    alpha_visc = 1
-    beta_visc = 2
+    alpha_min = 0.1
+    alpha_max = 1.5
+
+    a = alpha[i,j]
+
+    position = pos[i,j]
+    velocity = vel[i,j]
+    dim = len(position)
+
+    rho = density[i,j]
+    p = pressure[i,j]
+    c = math.sqrt(adiabatic_idx * p / rho)
+
+    h_i = smoothing_lengths[i,j]
+
+    tau = h_i / (0.1 * c)
+
+    div = 0.0
+
+    for i1 in range(pos.shape[0]):
+        for j1 in range(pos.shape[1]):
+
+            radius = 0.0
+            for d in range(dim):
+                radius += (position[d] - pos[i1, j1, d])**2
+
+            radius = math.sqrt(radius)
+            
+            h_j = smoothing_lengths[i1,j1]
+            h = 0.5*(h_i + h_j)
+
+            if radius > 1e-12:
+                grad_w = dwdq_quintic_gpu(radius, h, dim) * (1./h) / radius
+            else:
+                grad_w = 0.0
+
+            #other_rho = density[i1, j1]
+
+            div_ij = 0.0
+
+            #for d in range(dim):
+            #    div_ij += (vel[i1, j1, d]) * grad_w * (position[d] - pos[i1, j1, d])
+
+            for d in range(dim):
+                div_ij += (velocity[d] - vel[i1, j1, d]) * grad_w * (position[d] - pos[i1, j1, d])
+
+            #div += (particle_mass[i1,j1] / other_rho) * div_ij
+            div += particle_mass[i1,j1] * div_ij
+    
+    #divergence[i,j] = -(1/density[i,j]) * div #max( -(1/density[i,j]) * div, 0.0 )
+
+    source_term = max( ( -(1/density[i,j]) * div ) * (alpha_max - a), 0.0 )
+
+    alpha_deriv[i,j] = - ( (alpha[i,j] - alpha_min) / tau ) + source_term
+
+            
+
+
+
+
+
+@cuda.jit('void(float32[:,:,:], float32[:,:,:], float32[:,:], float32[:,:], float32, float32[:,:], float32[:,:], float32[:,:,:], float32[:,:], float32[:,:], float32[:,:])')
+def calc_params_shocktube(pos, vel, particle_mass, smoothing_lengths, adiabatic_idx, density, pressure, dV, dE, alpha, mask):
+    i, j = cuda.grid(2)
+
+    #alpha_visc = 1
+    #alpha_visc_i = alpha[i,j]
+    alpha_visc = 1.0#alpha_visc_i
+    beta_visc = 2 * alpha_visc
     epsilon_visc = 0.01
 
     position = pos[i,j]
@@ -67,6 +135,12 @@ def calc_params_shocktube(pos, vel, particle_mass, smoothing_lengths, adiabatic_
             other_c = math.sqrt(adiabatic_idx * other_p / other_rho)
             c_mean = 0.5 * (c + other_c)
 
+            #other_alpha_visc = alpha[i1,j1]
+            #alpha_visc = 0.5*(alpha_visc_i + other_alpha_visc)
+            
+            #alpha_visc = alpha_visc_i
+            #beta_visc = 2.0*alpha_visc
+
             v_r_dot = 0.0
 
             for d in range(dim):
@@ -85,10 +159,10 @@ def calc_params_shocktube(pos, vel, particle_mass, smoothing_lengths, adiabatic_
             vij = 0.0
 
             for d in range(dim):
-                dV[i,j,d] += particle_mass * (pressure_acc + visc) * grad_w * (position[d] - pos[i1, j1, d])
+                dV[i,j,d] += particle_mass[i1,j1] * (pressure_acc + visc) * grad_w * (position[d] - pos[i1, j1, d])
                 vij += (velocity[d] - vel[i1, j1, d]) * grad_w * (position[d] - pos[i1, j1, d])
 
-            d_e += particle_mass * (pressure_acc + visc) * vij
+            d_e += particle_mass[i1,j1] * (pressure_acc + visc) * vij
 
     for d in range(dim):
         dV[i,j,d] = -dV[i,j,d] * mask[i,j]

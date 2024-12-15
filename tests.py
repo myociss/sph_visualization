@@ -5,7 +5,7 @@ from scipy.special import gamma
 from numba import cuda, float32, int8, from_dtype
 from kernels import w_gauss, dwdq_gauss, w_quintic_gpu, dwdq_quintic_gpu
 from astro_core import calc_density, calc_dv_toystar
-from smoothing_length import calc_h_guesses, calc_midpoint, calc_zeta, bisect_update, get_new_smoothing_lengths
+from smoothing_length import calc_h_guesses, calc_midpoint, calc_zeta, bisect_update, get_new_smoothing_lengths, calc_zeta_prime
 from pmocz_functions import pairwise_separations, density, dv
 import pytest
 
@@ -234,11 +234,13 @@ def test_zeta(setup_data, spatial_dim):
     assert np.all(sign_change_sum == 1)
 
 
+def test_mask():
+    pass
 
 @pytest.mark.parametrize('spatial_dim', [2, 3])
 def test_bisection_method(setup_data, spatial_dim):
     pos_2d, pos_3d = setup_data
-    n_samples = 50
+    n_samples = 200
     n_iter = 30
 
     pos_gpu = pos_2d if spatial_dim == 2 else pos_3d
@@ -262,24 +264,49 @@ def test_bisection_method(setup_data, spatial_dim):
     delta_ratio = np.max(np.abs(x_cpu[:,:,2] - x_cpu[:,:,0]) / R)
     assert np.all(delta_ratio < 0.001 * R) # error as a percentage of radius
 
-    '''
+    midpt_x_cpu = x[:,:,1].copy_to_host()
+    midpt_y_cpu = y[:,:,1].copy_to_host()
     sign_test_vals = np.zeros((particle_dim, particle_dim, n_samples), dtype='f4')
 
+    prime_test_vals = np.zeros((particle_dim, particle_dim, n_samples), dtype='f4')
+
     zeta = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
+    zeta_prime = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
 
     for i in range(n_samples):
         h_iter = cuda.to_device(np.ascontiguousarray(all_hvals[i,:,:]))
-        calc_zeta[bpg, tpb](pos_gpu, mask, particle_mass, h_iter, zeta)
+        calc_zeta[bpg, tpb](pos_gpu, mask, particle_masses, h_iter, zeta)
         zeta_cpu = zeta.copy_to_host()
         sign_test_vals[:,:,i] = zeta_cpu
 
+        calc_zeta_prime[bpg, tpb](pos_gpu, mask, particle_masses, h_iter, zeta_prime)
+        zeta_prime_cpu = zeta_prime.copy_to_host()
+        prime_test_vals[:,:,i] = zeta_prime_cpu
+
+    
     problem_idx = np.unravel_index(np.argmax(np.abs(midpt_y_cpu)), midpt_y_cpu.shape)
     print(problem_idx)
     print(midpt_y_cpu[problem_idx])
     print(midpt_x_cpu[problem_idx])
+
+    approx_tangents = []
+
+    for idx in range(1, len(sign_test_vals[problem_idx])-1):
+        approx_tangent = (sign_test_vals[problem_idx][idx+1] - sign_test_vals[problem_idx][idx-1]) / (2 * (all_hvals[1,problem_idx[0],problem_idx[1]]-all_hvals[0,problem_idx[0],problem_idx[1]]) )
+        #approx_tangents.append(round(approx_tangent))
+        approx_tangents.append(approx_tangent)
+
+        #print('---------')
+        #print(zeta_vals[idx])
+        #print(approx_tangent)
+        #print(zeta_prime_vals[idx])
+
+
     fig = plt.figure()
     ax1 = fig.add_subplot(111)
     ax1.scatter(all_hvals[:,problem_idx[0],problem_idx[1]], sign_test_vals[problem_idx])
-    ax1.scatter([midpt_x_cpu[problem_idx]], [midpt_y_cpu[problem_idx]])
+    #ax1.scatter([midpt_x_cpu[problem_idx]], [midpt_y_cpu[problem_idx]])
+    
+    ax1.scatter(all_hvals[:,problem_idx[0],problem_idx[1]], prime_test_vals[problem_idx])
+    ax1.scatter(all_hvals[1:-1,problem_idx[0],problem_idx[1]], approx_tangents)
     plt.show()
-    '''

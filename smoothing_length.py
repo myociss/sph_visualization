@@ -1,11 +1,67 @@
 import math
 import numpy as np
 from numba import cuda
-from kernels import w_quintic_gpu, dwdq_quintic_gpu
+from kernels import w_quintic_gpu, dwdq_quintic_gpu, dwdh_quintic_gpu
 
 eta_const = 1.0 # from "Phantom: A smoothed particle hydrodynamics and magnetohydrodynamics code for astrophysics"
 # (https://arxiv.org/pdf/1702.03930) table 1
 
+
+@cuda.jit('void(float32[:,:,:], float32[:,:], float32[:,:], float32[:,:], float32[:,:])')
+def calc_zeta_prime(pos, mask, particle_mass, smoothing_lengths, zeta_prime):
+    i, j = cuda.grid(2)
+
+    if mask[i,j]==0:
+        return
+
+    position = pos[i, j]
+    dim = len(position)
+    h = smoothing_lengths[i,j]
+
+    rho = 0.0
+
+    gradh = 0.0
+
+    for i1 in range(pos.shape[0]):
+        for j1 in range(pos.shape[1]):
+            if mask[i1,j1]==0:
+                continue
+
+            radius = 0.0
+            for d in range(dim):
+                radius += (position[d] - pos[i1, j1, d])**2
+
+            radius = math.sqrt(radius)
+
+            #dwdh = dwdh_quintic_gpu(radius, h, dim)
+            #gradh += particle_mass[i1,j1] * dwdh
+
+            w = w_quintic_gpu(radius, h, dim)
+
+            if radius > 1e-12:
+                grad_w = dwdq_quintic_gpu(radius, h, dim) * (1./h)
+            else:
+                grad_w = 0.0
+
+            gradh +=  particle_mass[i1,j1] * ( (-radius/h)*grad_w - (3/h)*w)
+
+            rho += particle_mass[i1,j1] * w
+
+    # sort of close?????
+    #omega = (1.0 - (3 * h / rho) * gradh  ) 
+    #zeta_prime[i,j] = - 3 * rho * omega / h
+
+    omega = (1.0 + (dim * h / rho) * gradh  )
+    zeta_prime[i,j] = - (dim * rho / h) * omega
+    #zeta_prime = gradh - (- rho / (3 * h))
+
+    #omega = 1.0 + (h/(3*rho))*gradh
+    #zeta_prime[i,j] =  3 * rho * omega / h
+
+    #omega = (1.0 + (h/(3.0*rho)) )*gradh
+    #zeta_prime[i,j] =  -3.0 * rho * omega / h
+    
+            
 
 @cuda.jit('void(float32[:,:,:], float32[:,:], float32[:,:], float32[:,:], float32[:,:])')
 def calc_zeta(pos, mask, particle_mass, smoothing_lengths, zeta):
@@ -33,7 +89,8 @@ def calc_zeta(pos, mask, particle_mass, smoothing_lengths, zeta):
             w = w_quintic_gpu(radius, h, dim)
             rho += particle_mass[i1,j1] * w
 
-    zeta[i,j] = particle_mass[i,j] * ( (eta_const / h)**dim ) - rho
+    #zeta[i,j] = particle_mass[i,j] * ( (eta_const / h)**dim ) - rho
+    zeta[i,j] = rho - ( particle_mass[i,j] * ( (eta_const / h)**dim ) )
 
 
 @cuda.jit('void(float32[:,:,:], float32[:,:], float32, float32[:,:,:])')

@@ -6,8 +6,8 @@ R = 6.99e9
 G = 6.674e-8
 K = 2.6e12
 alpha = np.sqrt(K/2./np.pi/G)
-Nbin = 64#50
-N = 64*64 - 1
+Nbin = 128#50
+N = 128*128 +2
 dxi = np.pi/Nbin
 
 x_vals = []
@@ -47,3 +47,14 @@ fig = plt.figure()
 ax1 = fig.add_subplot(111)
 ax1.scatter( y_vals, z_vals, c=[1 for i in range(len(x_vals))], cmap=plt.cm.jet, s=10, alpha=0.5)
 plt.show()
+
+print('????')
+print(len(x_vals))
+print(len(y_vals))
+print(len(z_vals))
+
+array = np.array([[x_vals[i],y_vals[i],z_vals[i]] for i in range(len(x_vals))])
+array = np.reshape(array, (128,128,3))
+
+with open('data/points_128_start.npy','wb') as f:
+    np.save(f, array)

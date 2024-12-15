@@ -126,6 +126,19 @@ def gradw_quintic(r, h, dim):
 
     return tmp
 
+def dwdh_quintic(r, h, dim):
+    h1 = 1. / h
+
+    q = r * h1
+
+    f_q = w_quintic_gpu(r,h,dim) #/ (h1 ** dim)
+    f_q_prime = dwdq_quintic_gpu(r,h,dim) #/ (h1 ** dim)
+    return -h1 * (3*f_q + (q * f_q_prime))
+
+    #f_q = w_quintic_gpu(r,h,dim) / (h1 ** dim)
+    #f_q_prime = dwdq_quintic_gpu(r,h,dim) / (h1 ** dim)
+    #return -(h1**(dim+1)) * (3*f_q + (r * h1 * f_q_prime) )
+
 def grav_grad_quintic(r, h):
     # from phantom sph
     h1 = 1. / h
@@ -158,7 +171,10 @@ def grav_grad_quintic(r, h):
 
 w_quintic_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(w_quintic)
 #gradw_quintic_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(gradw_quintic)
+
 dwdq_quintic_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(dwdq_quintic)
+
+dwdh_quintic_gpu = cuda.jit("float32(float32, float32, int64)", device=True)(dwdh_quintic)
 grav_grad_quintic_gpu = cuda.jit("float32(float32, float32)", device=True)(grav_grad_quintic)
 
 
@@ -166,6 +182,10 @@ if __name__ == '__main__':
     # sanity check for kernels; replication of Figure 2 from Smoothed Particle Hydrodynamics and Magnetohydrodynamics, Daniel J. Price
     # https://users.monash.edu.au/~dprice/ndspmhd/price-spmhd.pdf
     # f(x) and f'(x) only
+
+    print(dwdh_quintic(0.0, 1.0, 3))
+    print(dwdh_quintic(0.0, 1.0, 3) / -quintic_norm_3d)
+    #exit()
 
     h = 1.0
     n_samples = 50

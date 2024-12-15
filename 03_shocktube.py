@@ -4,7 +4,8 @@ import os
 import matplotlib.pyplot as plt
 from scipy.optimize import newton
 from numba import cuda
-from astro_core import calc_params_shocktube, calc_pressure_from_energy, calc_density, calc_mean_nd, leapfrog_update_nd, leapfrog_update
+from kernels import dwdq_quintic_gpu
+from astro_core import calc_params_shocktube, calc_pressure_from_energy, calc_density, calc_mean_nd, leapfrog_update_nd, leapfrog_update, calc_alpha_deriv
 
 
 # from https://physics.stackexchange.com/questions/423758/how-to-get-exact-solution-to-sod-shock-tube-test:
@@ -13,6 +14,7 @@ def f(P, pL, pR, cL, cR, gg):
     b = np.sqrt( 2*gg*(2*gg + (gg+1)*(P-1) ) )
     return P - pL/pR*( 1 - a/b )**(2.*gg/(gg-1.))
 
+# 1.0, 0.0, 1.0, 0.25, 0.0, 0.1795, xs, x0, steps*1e-04, 1.4
 # from https://physics.stackexchange.com/questions/423758/how-to-get-exact-solution-to-sod-shock-tube-test:
 def SodShockAnalytic(rL, uL, pL, rR, uR, pR, xs, x0, T, gg):
     # rL, uL, pL, rR, uR, pR : Initial conditions of the Reimann problem 
@@ -30,6 +32,8 @@ def SodShockAnalytic(rL, uL, pL, rR, uR, pR, xs, x0, T, gg):
     # compute P
     P = newton(f, 0.5, args=(pL, pR, cL, cR, gg), tol=1e-12);
 
+    print(P)
+
     # compute region positions right to left
     # region R
     c_shock = uR + cR*np.sqrt( (gg-1+P*(gg+1)) / (2*gg) )
@@ -37,6 +41,11 @@ def SodShockAnalytic(rL, uL, pL, rR, uR, pR, xs, x0, T, gg):
     v_analytic[0,x_shock-1:] = rR
     v_analytic[1,x_shock-1:] = uR
     v_analytic[2,x_shock-1:] = pR
+
+    print((rR, uR, pR))
+
+    print('region R:')
+    print(uR)
     
     # region 2
     alpha = (gg+1)/(gg-1)
@@ -45,6 +54,9 @@ def SodShockAnalytic(rL, uL, pL, rR, uR, pR, xs, x0, T, gg):
     v_analytic[0,x_contact:x_shock-1] = (1 + alpha*P)/(alpha+P)*rR
     v_analytic[1,x_contact:x_shock-1] = c_contact
     v_analytic[2,x_contact:x_shock-1] = P*pR
+
+    print('region 2:')
+    print(c_contact)
     
     # region 3
     r3 = rL*(P*pR/pL)**(1/gg);
@@ -54,6 +66,9 @@ def SodShockAnalytic(rL, uL, pL, rR, uR, pR, xs, x0, T, gg):
     v_analytic[0,x_fanright:x_contact] = r3;
     v_analytic[1,x_fanright:x_contact] = c_contact;
     v_analytic[2,x_fanright:x_contact] = P*pR;
+
+    print('region 3:')
+    print(c_contact)
     
     # region 4
     c_fanleft = -cL
@@ -63,12 +78,27 @@ def SodShockAnalytic(rL, uL, pL, rR, uR, pR, xs, x0, T, gg):
     v_analytic[1,x_fanleft:x_fanright] = u4;
     v_analytic[2,x_fanleft:x_fanright] = pL*(1 - (gg-1)/2.*u4/cL)**(2*gg/(gg-1));
 
+    print('region 4:')
+    print(x_fanleft)
+    print(x_fanright)
+    print(xs[x_fanleft:x_fanright])
+    print(u4)
+
     # region L
     v_analytic[0,:x_fanleft] = rL
     v_analytic[1,:x_fanleft] = uL
     v_analytic[2,:x_fanleft] = pL
 
+    print('region L:')
+    print(uL)
+
+    print(x_shock)
+
+    # analytical divergence is [0,0,0,(-) 16.666663366667464,0] ???
+
     return v_analytic
+
+
 
 particle_dim = 32
 spatial_dim = 1
@@ -110,6 +140,15 @@ vel_mean =cuda.to_device( np.zeros(d_vel.shape, dtype='f4'))
 d_rho = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
 d_e = cuda.to_device(np.reshape(e, (particle_dim, particle_dim)).astype('f4'))
 e_i = cuda.to_device(np.zeros(d_e.shape, dtype='f4'))
+
+alpha_init = 0.9
+
+d_alpha = cuda.to_device(np.zeros((particle_dim,particle_dim), dtype='f4') + alpha_init)
+alpha_i = cuda.to_device(np.zeros(d_alpha.shape, dtype='f4'))
+d_dalpha = cuda.to_device(np.zeros(d_alpha.shape, dtype='f4'))
+
+d_divergence = cuda.to_device(np.zeros((particle_dim,particle_dim), dtype='f4'))
+
 d_pressure = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
 d_de = cuda.to_device(np.zeros((particle_dim, particle_dim), dtype='f4'))
 d_dv = cuda.to_device(np.zeros((particle_dim, particle_dim, spatial_dim), dtype='f4'))
@@ -118,11 +157,14 @@ d_mask = cuda.to_device(np.reshape(mask, (particle_dim, particle_dim)).astype('f
 smoothing_length = np.zeros((particle_dim, particle_dim)) + h
 smoothing_length = cuda.to_device(smoothing_length.astype('f4'))
 
+particle_masses = np.zeros((particle_dim, particle_dim)) + particle_mass
+particle_masses = cuda.to_device(particle_masses.astype('f4'))
+
 dt = 1e-04
 tEnd = 0.2
 steps = int(tEnd/dt)
 
-steps = 30
+steps = 2000
 import time
 start = time.time()
 
@@ -132,27 +174,42 @@ for i in range(steps):
     pos_i[:] = d_pos
     vel_i[:] = d_vel
     e_i[:] = d_e
+    alpha_i[:] = d_alpha
 
     leapfrog_update_nd[bpg, tpb](d_pos, d_pos, d_vel, dt*0.5)
     leapfrog_update_nd[bpg, tpb](d_vel, d_vel, d_dv, dt*0.5)
 
-    calc_density[bpg, tpb](d_pos, particle_mass, smoothing_length, d_rho)
+    calc_density[bpg, tpb](d_pos, particle_masses, smoothing_length, d_rho)
     calc_pressure_from_energy[bpg, tpb](d_rho, d_e, gamma, d_pressure)
-    calc_params_shocktube[bpg, tpb](d_pos, d_vel, particle_mass, smoothing_length, gamma, d_rho, d_pressure, d_dv, d_de, d_mask)
+
+    calc_alpha_deriv[bpg, tpb](d_pos, d_vel, particle_masses, smoothing_length, d_rho, d_pressure, gamma, d_alpha, d_dalpha)
+    
+    calc_params_shocktube[bpg, tpb](d_pos, d_vel, particle_masses, smoothing_length, gamma, d_rho, d_pressure, d_dv, d_de, d_alpha, d_mask)
+
+    #calc_divergence[bpg, tpb](d_pos, d_vel, particle_masses, smoothing_length, d_rho, d_divergence)
+
+
+    print(np.max(d_dalpha.copy_to_host()))
+    print(np.max(d_alpha.copy_to_host()))
+    print(np.min(d_alpha.copy_to_host()))
 
     leapfrog_update_nd[bpg, tpb](vel_i, d_vel, d_dv, dt)
     leapfrog_update[bpg, tpb](e_i, d_e, d_de, dt)
+    leapfrog_update[bpg, tpb](alpha_i, d_alpha, d_dalpha, dt)
 
     calc_mean_nd[bpg, tpb](vel_i, d_vel, vel_mean)
     leapfrog_update_nd[bpg, tpb](pos_i, d_pos, vel_mean, dt)
 
 print(time.time() - start)
-exit()
+#exit()
 
 pos = np.reshape(d_pos.copy_to_host(), (particle_dim*particle_dim))
 vel = np.reshape(d_vel.copy_to_host(), (particle_dim*particle_dim))
 rho = np.reshape(d_rho.copy_to_host(), (particle_dim*particle_dim))
 pressure = np.reshape(d_pressure.copy_to_host(), (particle_dim*particle_dim))
+
+acc = np.reshape(d_dv.copy_to_host(), (particle_dim*particle_dim))
+alpha = np.reshape(d_alpha.copy_to_host(), (particle_dim*particle_dim))
 
 indexes = np.where((x > -0.4) & (x < 0.4))
     
@@ -164,6 +221,16 @@ x0 = Nx//2
 analytic = SodShockAnalytic(1.0, 0.0, 1.0, 0.25, 0.0, 0.1795, xs, x0, steps*1e-04, 1.4)
 
 png_path = os.path.join(os.path.dirname(__file__), f'figures/03_shocktube')
+
+fig = plt.figure()
+ax1 = fig.add_subplot(111)
+ax1.scatter(pos[indexes], alpha[indexes], marker='.')
+plt.show()
+
+fig = plt.figure()
+ax1 = fig.add_subplot(111)
+ax1.scatter(pos[indexes], acc[indexes], marker='.')
+plt.show()
 
 for param, numeric, analytic in zip(['density', 'velocity', 'pressure'], [rho, vel, pressure], analytic):
     fig = plt.figure()
