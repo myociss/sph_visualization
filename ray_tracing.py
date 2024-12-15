@@ -38,148 +38,10 @@ def fix_t_gpu(t_val, ray_dir):
     else:
         return (1.0 / ray_dir) * t_val
 
-def get_nearest(aabbtree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, stack, triangles):
-    stack_pointer = 0
 
-    stack[stack_pointer+1] = 0
-    stack_pointer += 1
-
-    nearest_dist = np.inf
-
-    while stack_pointer > 0:
-        tree_index = stack[stack_pointer - 1]
-        stack_pointer -= 1
-
-        node = aabbtree[tree_index]
-
-        if node[AABB_DATA] > -1.0:
-            tri = triangles[int(node[AABB_DATA])]
-            v0 = tri[0]
-            v1 = tri[1]
-            v2 = tri[2]
-
-            # e1 = v1 - v0
-            e1_x = v1[0] - v0[0]
-            e1_y = v1[1] - v0[1]
-            e1_z = v1[2] - v0[2]
-
-            # e2 = v2 - v0
-            e2_x = v2[0] - v0[0]
-            e2_y = v2[1] - v0[1]
-            e2_z = v2[2] - v0[2]
-
-            # P = cross(ray.direction, e2)
-            P_x = ray_dir_y*e2_z - ray_dir_z*e2_y
-            P_y = ray_dir_z*e2_x - ray_dir_x*e2_z
-            P_z = ray_dir_x*e2_y - ray_dir_y*e2_x
-
-            # det = dot(e1, P)
-            det = e1_x*P_x + e1_y*P_y + e1_z*P_z
-
-            # if (det > -M_EPSILON && det < M_EPSILON) return false
-            if det > -M_EPSILON and det < M_EPSILON:
-                #return np.inf
-                continue
-
-            # invDet = 1.0f / det
-            invDet = 1.0 / det
-
-            # T = ray.origin - v0
-            T_x = ray_origin_x - v0[0]
-            T_y = ray_origin_y - v0[1]
-            T_z = ray_origin_z - v0[2]
-
-            # u = dot(T, P)*invDet
-            u = invDet * (T_x*P_x + T_y*P_y + T_z*P_z)
-
-            # if (u < 0.0f || u > 1.0f) return false
-            if u < 0.0 or u > 1.0:
-                #return np.inf
-                continue
-
-            # Q = cross(T, e1)
-            Q_x = T_y*e1_z - T_z*e1_y
-            Q_y = T_z*e1_x - T_x*e1_z
-            Q_z = T_x*e1_y - T_y*e1_x
-
-            # v = dot(ray.direction, Q)*invDet
-            v = invDet * (ray_dir_x*Q_x + ray_dir_y*Q_y + ray_dir_z*Q_z)
-
-            # if (v < 0.0f || u + v > 1.0f) return false
-            if v < 0.0 or u+v > 1.0:
-                #return np.inf
-                continue
-
-            # t0 = dot(e2, Q) * invDet
-            t0 = invDet * (e2_x*Q_x + e2_y*Q_y + e2_z*Q_z)
-
-            #if (t0 > M_EPSILON && t0 < t) {
-            #    t = t0;
-            #    intersection.position = ray.origin + t*ray.direction;
-            #    intersection.normal = normalize(cross(e1, e2));
-            #    return true
-            #}
-            
-            if t0 > M_EPSILON and t0 < nearest_dist:
-                #return t0
-                t0 = nearest_dist
-        else:
-        
-            # directionInv = glm::vec3(1.0f / ray.direction.x, 1.0f / ray.direction.y, 1.0f / ray.direction.z)
-            '''
-            if ray_dir_x == 0.0:
-                inv_x = np.inf
-            else:
-                inv_x = 1.0 / ray_dir_x
-            
-            if ray_dir_y == 0.0:
-                inv_y = np.inf
-            else:
-                inv_y = 1.0 / ray_dir_y
-
-            if ray_dir_z == 0.0:
-                inv_z = np.inf
-            else:
-                inv_z = 1.0 / ray_dir_z
-            '''
-
-            #float t1 = (pmin.x - ray.origin.x) * inv.x;
-            t1 = (node[AABB_XMIN] - ray_origin_x) #* inv_x
-            t2 = (node[AABB_XMAX] - ray_origin_x) #* inv_x
-
-            t3 = (node[AABB_YMIN] - ray_origin_y) #* inv_y
-            t4 = (node[AABB_YMAX] - ray_origin_y) #* inv_y
-
-            t5 = (node[AABB_ZMIN] - ray_origin_z) #* inv_z
-            t6 = (node[AABB_ZMAX] - ray_origin_z) #* inv_z
-            
-
-            t1 = fix_t_gpu(t1, ray_dir_x)
-            t2 = fix_t_gpu(t2, ray_dir_x)
-            t3 = fix_t_gpu(t3, ray_dir_y)
-            t4 = fix_t_gpu(t4, ray_dir_y)
-            t5 = fix_t_gpu(t5, ray_dir_z)
-            t6 = fix_t_gpu(t6, ray_dir_z)
-            
-
-            #float tmin = fmax(fmax(fmin(t1, t2), fmin(t3, t4)), fmin(t5, t6));
-            tmin = max(max(min(t1,t2), min(t3,t4)), min(t5,t6))
-            #float tmax = fmin(fmin(fmax(t1, t2), fmax(t3, t4)), fmax(t5, t6));
-            tmax = min(min(max(t1,t2), max(t3,t4)), max(t5,t6))
-
-            if tmax <= 0.0 or tmin > tmax:
-                #return np.inf
-                continue
-
-            #left_dist = get_nearest(aabbtree, int(node[AABB_LEFT]), ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, triangles)
-            #right_dist = get_nearest(aabbtree, int(node[AABB_RIGHT]), ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, triangles)
-
-            #return min(left_dist, right_dist)
-
-            stack[stack_pointer] = int(node[AABB_LEFT])
-
+'''
 #@cuda.jit('float64(float64[:,:], float64[:], float64, float64, float64, float64, float64, float64, float64[:,:,:])', device=True)
-def get_nearest_asdf(aabbtree, complete_list, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, triangles):
+def get_nearest(aabbtree, complete_list, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, triangles):
 
     tree_index = 0
     min_dist = np.inf
@@ -219,13 +81,13 @@ def get_nearest_asdf(aabbtree, complete_list, ray_origin_x, ray_origin_y, ray_or
 
     #print(iterations)
     return min_dist
-
+'''
 
 
 #@cuda.jit('float64(float64[:,:], float64, float64, float64, float64, float64, float64, int64[:], float64[:,:,:])', device=True)
 #def get_nearest(aabbtree, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, stack, triangles):
 @cuda.jit('float64(float64[:,:], int64, int64, float64, float64, float64, float64, float64, float64, int64[:,:,:], float64[:,:,:])', device=True)
-def get_nearest_save2(aabbtree, xpix, ypix, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, stack, triangles):
+def get_nearest(aabbtree, xpix, ypix, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, stack, triangles):
     stack_pointer = 0
 
     stack[xpix,ypix,stack_pointer+1] = 0
@@ -430,129 +292,11 @@ def get_nearest_save2(aabbtree, xpix, ypix, ray_origin_x, ray_origin_y, ray_orig
             #stack_pointer -= 1
 
     return nearest_dist
-    
-
-
-#@cuda.jit('float64(float64[:,:], int64, float64, float64, float64, float64, float64, float64, float64[:,:,:])', device=True)
-def get_nearest_save(aabbtree, tree_index, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, triangles):
-    node = aabbtree[tree_index]
-
-    if node[AABB_DATA] > -1.0:
-        # leaf node
-        #return 0.0
-
-        tri = triangles[int(node[AABB_DATA])]
-        v0 = tri[0]
-        v1 = tri[1]
-        v2 = tri[2]
-
-        # e1 = v1 - v0
-        e1_x = v1[0] - v0[0]
-        e1_y = v1[1] - v0[1]
-        e1_z = v1[2] - v0[2]
-
-        # e2 = v2 - v0
-        e2_x = v2[0] - v0[0]
-        e2_y = v2[1] - v0[1]
-        e2_z = v2[2] - v0[2]
-
-        # P = cross(ray.direction, e2)
-        P_x = ray_dir_y*e2_z - ray_dir_z*e2_y
-        P_y = ray_dir_z*e2_x - ray_dir_x*e2_z
-        P_z = ray_dir_x*e2_y - ray_dir_y*e2_x
-
-        # det = dot(e1, P)
-        det = e1_x*P_x + e1_y*P_y + e1_z*P_z
-
-        # if (det > -M_EPSILON && det < M_EPSILON) return false
-        if det > -M_EPSILON and det < M_EPSILON:
-            return np.inf
-
-        # invDet = 1.0f / det
-        invDet = 1.0 / det
-
-        # T = ray.origin - v0
-        T_x = ray_origin_x - v0[0]
-        T_y = ray_origin_y - v0[1]
-        T_z = ray_origin_z - v0[2]
-
-        # u = dot(T, P)*invDet
-        u = invDet * (T_x*P_x + T_y*P_y + T_z*P_z)
-
-        # if (u < 0.0f || u > 1.0f) return false
-        if u < 0.0 or u > 1.0:
-            return np.inf
-
-        # Q = cross(T, e1)
-        Q_x = T_y*e1_z - T_z*e1_y
-        Q_y = T_z*e1_x - T_x*e1_z
-        Q_z = T_x*e1_y - T_y*e1_x
-
-        # v = dot(ray.direction, Q)*invDet
-        v = invDet * (ray_dir_x*Q_x + ray_dir_y*Q_y + ray_dir_z*Q_z)
-
-        # if (v < 0.0f || u + v > 1.0f) return false
-        if v < 0.0 or u+v > 1.0:
-            return np.inf
-
-        # t0 = dot(e2, Q) * invDet
-        t0 = invDet * (e2_x*Q_x + e2_y*Q_y + e2_z*Q_z)
-
-        #if (t0 > M_EPSILON && t0 < t) {
-        #    t = t0;
-        #    intersection.position = ray.origin + t*ray.direction;
-        #    intersection.normal = normalize(cross(e1, e2));
-        #    return true
-        #}
-        
-        if t0 > M_EPSILON and t0 < np.inf:
-            return t0
-    else:
-        
-        # directionInv = glm::vec3(1.0f / ray.direction.x, 1.0f / ray.direction.y, 1.0f / ray.direction.z)
-        if ray_dir_x == 0.0:
-            inv_x = np.inf
-        else:
-            inv_x = 1.0 / ray_dir_x
-        
-        if ray_dir_y == 0.0:
-            inv_y = np.inf
-        else:
-            inv_y = 1.0 / ray_dir_y
-
-        if ray_dir_z == 0.0:
-            inv_z = np.inf
-        else:
-            inv_z = 1.0 / ray_dir_z
-
-        #float t1 = (pmin.x - ray.origin.x) * inv.x;
-        t1 = (node[AABB_XMIN] - ray_origin_x) * inv_x
-        t2 = (node[AABB_XMAX] - ray_origin_x) * inv_x
-
-        t3 = (node[AABB_YMIN] - ray_origin_y) * inv_y
-        t4 = (node[AABB_YMAX] - ray_origin_y) * inv_y
-
-        t5 = (node[AABB_ZMIN] - ray_origin_z) * inv_z
-        t6 = (node[AABB_ZMAX] - ray_origin_z) * inv_z
-        
-
-        #float tmin = fmax(fmax(fmin(t1, t2), fmin(t3, t4)), fmin(t5, t6));
-        tmin = max(max(min(t1,t2), min(t3,t4)), min(t5,t6))
-        #float tmax = fmin(fmin(fmax(t1, t2), fmax(t3, t4)), fmax(t5, t6));
-        tmax = min(min(max(t1,t2), max(t3,t4)), max(t5,t6))
-
-        if tmax <= 0.0 or tmin > tmax:
-            return np.inf
-
-        left_dist = get_nearest(aabbtree, int(node[AABB_LEFT]), ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, triangles)
-        right_dist = get_nearest(aabbtree, int(node[AABB_RIGHT]), ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, triangles)
-
-        return min(left_dist, right_dist)
 
 
 
-@cuda.jit('void(float64, float64, float64, float64, float64, int64, float64[:,:,:], int64[:,:,:], float64[:,:], float64[:,:])')
-def trace_aabb(x_origin, y_origin, x_range, y_range, zval, n_rays, triangles, stack, aabbtree, image):
+@cuda.jit('void(float64, float64, float64, float64, float64, int64, float64[:,:,:], int64[:,:,:], float64[:,:], int64, float64[:,:])')
+def trace_aabb(x_origin, y_origin, x_range, y_range, zval, n_rays, triangles, stack, aabbtree, num_rays, image):
 
     xpix, ypix = cuda.grid(2)
 
@@ -564,227 +308,24 @@ def trace_aabb(x_origin, y_origin, x_range, y_range, zval, n_rays, triangles, st
     ray_dir_y = 0.0
     ray_dir_z = 1.0
 
-    nearest = get_nearest_save2(aabbtree, xpix, ypix, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, stack, triangles)
+    #nearest = get_nearest_save2(aabbtree, xpix, ypix, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, stack, triangles)
+    nearest = np.inf
+
+    n = 0
+
+    for r in range(num_rays):
+        ray_dist = get_nearest(aabbtree, xpix, ypix, ray_origin_x, ray_origin_y, ray_origin_z, ray_dir_x, ray_dir_y, ray_dir_z, stack, triangles)
+        if ray_dist < nearest:
+            nearest = ray_dist
+        n += 1
+
 
     if nearest < np.inf:
-        image[xpix, ypix] = 1.0
-    
-
-@cuda.jit('void(float64, float64, float64, float64, float64, float64[:,:,:], int64, float64[:,:])')
-def trace(x_origin, y_origin, x_range, y_range, zval, triangles, n_rays, image):
-#@cuda.jit('void(float64, float64, float64, float64, float64, float64[:,:,:], int64[:,:,:,:], float64[:,:], int64, float64[:,:])')
-#def trace(x_origin, y_origin, x_range, y_range, zval, triangles, tri_grid, tri_grid_bounds, n_rays, image):
-    xpix, ypix = cuda.grid(2)
-
-    ray_origin_x = x_origin + (xpix * x_range / image.shape[0])
-    ray_origin_y = y_origin + (ypix * y_range / image.shape[1])
-    ray_origin_z = zval
-
-    ray_dir_x = 0.0
-    ray_dir_y = 0.0
-    ray_dir_z = 1.0
-
-    t = np.inf
-
-    #grid_dim = tri_grid.shape[0]
-
-    has_intersection = False
-
-    val = 0.0
+        image[xpix, ypix] = n#1.0
 
 
-    for r in range(n_rays):
-
-        ray_hit = False
-
-        # ray.directionInv = glm::vec3(1.0f / ray.direction.x, 1.0f / ray.direction.y, 1.0f / ray.direction.z);
-        '''
-
-        for grid_x in range(grid_dim):
-            
-            grid_x_min = tri_grid_bounds[0,0] + (grid_x / grid_dim) * (tri_grid_bounds[0,1] - tri_grid_bounds[0,0])
-            grid_x_max = tri_grid_bounds[0,0] + ( (grid_x+1) / grid_dim) * (tri_grid_bounds[0,1] - tri_grid_bounds[0,0])
-
-            for grid_y in range(grid_dim):
-                grid_y_min = tri_grid_bounds[1,0] + (grid_y / grid_dim) * (tri_grid_bounds[1,1] - tri_grid_bounds[1,0])
-                grid_y_max = tri_grid_bounds[1,0] + ( (grid_y+1) / grid_dim) * (tri_grid_bounds[1,1] - tri_grid_bounds[1,0])
-
-                for grid_z in range(grid_dim):
-                    grid_z_min = tri_grid_bounds[2,0] + (grid_z / grid_dim) * (tri_grid_bounds[2,1] - tri_grid_bounds[2,0])
-                    grid_z_max = tri_grid_bounds[2,0] + ( (grid_z+1) / grid_dim) * (tri_grid_bounds[2,1] - tri_grid_bounds[2,0])
-                    
-
-                    #if ray_origin_z > grid_z_max or ray_origin_z < grid_z_min:
-                    if not (grid_x_min <= ray_origin_x < grid_x_max and grid_y_min <= ray_origin_y < grid_y_max):
-                        continue
-
-                    #has_intersection = True
-
-                    tri_indexes = tri_grid[grid_x,grid_y,grid_z]
-
-                    for tri_index in tri_indexes:
-                        if tri_index == -1:
-                            break
-
-                        tri = triangles[tri_index]
-
-                        v0 = tri[0]
-                        v1 = tri[1]
-                        v2 = tri[2]
-
-                        # e1 = v1 - v0
-                        e1_x = v1[0] - v0[0]
-                        e1_y = v1[1] - v0[1]
-                        e1_z = v1[2] - v0[2]
-
-                        # e2 = v2 - v0
-                        e2_x = v2[0] - v0[0]
-                        e2_y = v2[1] - v0[1]
-                        e2_z = v2[2] - v0[2]
-
-                        # P = cross(ray.direction, e2)
-                        P_x = ray_dir_y*e2_z - ray_dir_z*e2_y
-                        P_y = ray_dir_z*e2_x - ray_dir_x*e2_z
-                        P_z = ray_dir_x*e2_y - ray_dir_y*e2_x
-
-                        # det = dot(e1, P)
-                        det = e1_x*P_x + e1_y*P_y + e1_z*P_z
-
-                        # if (det > -M_EPSILON && det < M_EPSILON) return false
-                        if det > -M_EPSILON and det < M_EPSILON:
-                            continue
-
-                        # invDet = 1.0f / det
-                        invDet = 1.0 / det
-
-                        # T = ray.origin - v0
-                        T_x = ray_origin_x - v0[0]
-                        T_y = ray_origin_y - v0[1]
-                        T_z = ray_origin_z - v0[2]
-
-                        # u = dot(T, P)*invDet
-                        u = invDet * (T_x*P_x + T_y*P_y + T_z*P_z)
-
-                        # if (u < 0.0f || u > 1.0f) return false
-                        if u < 0.0 or u > 1.0:
-                            continue
-
-                        # Q = cross(T, e1)
-                        Q_x = T_y*e1_z - T_z*e1_y
-                        Q_y = T_z*e1_x - T_x*e1_z
-                        Q_z = T_x*e1_y - T_y*e1_x
-
-                        # v = dot(ray.direction, Q)*invDet
-                        v = invDet * (ray_dir_x*Q_x + ray_dir_y*Q_y + ray_dir_z*Q_z)
-
-                        # if (v < 0.0f || u + v > 1.0f) return false
-                        if v < 0.0 or u+v > 1.0:
-                            continue
-
-                        # t0 = dot(e2, Q) * invDet
-                        t0 = invDet * (e2_x*Q_x + e2_y*Q_y + e2_z*Q_z)
-
-                        #if (t0 > M_EPSILON && t0 < t) {
-                        #    t = t0;
-                        #    intersection.position = ray.origin + t*ray.direction;
-                        #    intersection.normal = normalize(cross(e1, e2));
-                        #    return true
-                        #}
-                        
-                        if t0 > M_EPSILON and t0 < t:
-                            has_intersection = True
-                            ray_hit = True
-        '''
-
-        
-        for tri in triangles:
-            v0 = tri[0]
-            v1 = tri[1]
-            v2 = tri[2]
-
-            # e1 = v1 - v0
-            e1_x = v1[0] - v0[0]
-            e1_y = v1[1] - v0[1]
-            e1_z = v1[2] - v0[2]
-
-            # e2 = v2 - v0
-            e2_x = v2[0] - v0[0]
-            e2_y = v2[1] - v0[1]
-            e2_z = v2[2] - v0[2]
-
-            # P = cross(ray.direction, e2)
-            P_x = ray_dir_y*e2_z - ray_dir_z*e2_y
-            P_y = ray_dir_z*e2_x - ray_dir_x*e2_z
-            P_z = ray_dir_x*e2_y - ray_dir_y*e2_x
-
-            # det = dot(e1, P)
-            det = e1_x*P_x + e1_y*P_y + e1_z*P_z
-
-            # if (det > -M_EPSILON && det < M_EPSILON) return false
-            if det > -M_EPSILON and det < M_EPSILON:
-                continue
-
-            # invDet = 1.0f / det
-            invDet = 1.0 / det
-
-            # T = ray.origin - v0
-            T_x = ray_origin_x - v0[0]
-            T_y = ray_origin_y - v0[1]
-            T_z = ray_origin_z - v0[2]
-
-            # u = dot(T, P)*invDet
-            u = invDet * (T_x*P_x + T_y*P_y + T_z*P_z)
-
-            # if (u < 0.0f || u > 1.0f) return false
-            if u < 0.0 or u > 1.0:
-                continue
-
-            # Q = cross(T, e1)
-            Q_x = T_y*e1_z - T_z*e1_y
-            Q_y = T_z*e1_x - T_x*e1_z
-            Q_z = T_x*e1_y - T_y*e1_x
-
-            # v = dot(ray.direction, Q)*invDet
-            v = invDet * (ray_dir_x*Q_x + ray_dir_y*Q_y + ray_dir_z*Q_z)
-
-            # if (v < 0.0f || u + v > 1.0f) return false
-            if v < 0.0 or u+v > 1.0:
-                continue
-
-            # t0 = dot(e2, Q) * invDet
-            t0 = invDet * (e2_x*Q_x + e2_y*Q_y + e2_z*Q_z)
-
-            #if (t0 > M_EPSILON && t0 < t) {
-            #    t = t0;
-            #    intersection.position = ray.origin + t*ray.direction;
-            #    intersection.normal = normalize(cross(e1, e2));
-            #    return true
-            #}
-            
-            if t0 > M_EPSILON and t0 < t:
-                has_intersection = True
-        
-
-    if has_intersection:
-        image[xpix, ypix] = 1.0
-
-
-
+'''
 def inorderTraversal(root, parent_idx, lr, lst):
-    '''
-    # Base case: if null
-    if root is None:
-        return
-      
-    # Recur on the left subtree
-    inorderTraversal(root.left)
-    
-    # Visit the current node
-    print(root.data, end=" ")
-    
-    # Recur on the right subtree
-    inorderTraversal(root.right)
-    '''
 
     self_index = len(lst)
     self_entry = [-1,-1,-1,-1,-1,-1,-1,-1,-1,-1]
@@ -816,6 +357,7 @@ def inorderTraversal(root, parent_idx, lr, lst):
 
     inorderTraversal(root.left, self_index, AABB_LEFT, lst)
     inorderTraversal(root.right, self_index, AABB_RIGHT, lst)
+'''
 
 def serialize_tree(root, parent_idx, lr, lst):
     self_index = len(lst)
@@ -831,8 +373,8 @@ def serialize_tree(root, parent_idx, lr, lst):
 
     volume = (root.bbox.xmax - root.bbox.xmin) * (root.bbox.ymax - root.bbox.ymin) * (root.bbox.zmax - root.bbox.zmin)
 
-    print(self_entry)
-    print(volume)
+    #print(self_entry)
+    #print(volume)
 
     lst.append(self_entry)
 
@@ -1030,7 +572,7 @@ obj_dir = os.path.join(os.path.dirname(__file__), 'data/obj_files/frame_498')
 start = time.time()
 
 
-for fname in ['small']:
+for fname in ['big']:
     mesh = meshio.read(os.path.join(obj_dir, f'{fname}.obj'))
 
     #tree = AABBTree()
@@ -1149,16 +691,22 @@ for fname in ['small']:
 
     d_tree_ints = cuda.to_device(tree_ints)
 
+    gpu_start = time.time()
+    num_rays = 10000
+
     #trace[bpg, tpb](x_orig, y_orig, x_range, y_range, z_orig, d_tris, 1, image)
-    trace_aabb[bpg, tpb](x_orig, y_orig, x_range, y_range, z_orig, n_rays, d_tris, d_stack, d_tree, image)
+    trace_aabb[bpg, tpb](x_orig, y_orig, x_range, y_range, z_orig, n_rays, d_tris, d_stack, d_tree, num_rays, image)
+
+    print('gpu time')
+    print(time.time() - gpu_start)
+
     img = image.copy_to_host()
     plt.imshow(img)
-    print(time.time() - start)
     plt.show()
 
     #exit()
 
-
+    '''
     img_cpu = np.zeros((img_dim,img_dim))
     for xpix in range(img_dim):
         print(xpix)
@@ -1185,6 +733,7 @@ for fname in ['small']:
 
     plt.imshow(img_cpu)
     plt.show()
+    '''
     
 
 print(time.time() - start)
